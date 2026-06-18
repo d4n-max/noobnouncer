@@ -1,0 +1,202 @@
+:root {
+  color-scheme: dark;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #111315;
+  color: #f3f5f7;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100dvh; background: #111315; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+
+.login-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at top left, #1f3b38, #111315 38%);
+}
+
+.login-panel {
+  width: min(420px, calc(100% - 32px));
+  border: 1px solid #30363b;
+  background: #181b1f;
+  border-radius: 8px;
+  padding: 32px;
+  display: grid;
+  gap: 16px;
+}
+
+.mark, .brand span {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #45d68a;
+  color: #07130d;
+  font-weight: 800;
+}
+
+.login-panel h1 { margin: 0; font-size: 28px; }
+.login-panel p { margin: 0; color: #a9b1ba; }
+
+.app-shell { min-height: 100dvh; display: grid; grid-template-columns: 260px 1fr; }
+.sidebar {
+  background: #15181b;
+  border-right: 1px solid #2a2f35;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.sidebar nav { display: grid; gap: 8px; }
+.sidebar button, .row-actions button, .notice button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #c8d0d8;
+}
+.sidebar nav button {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  text-align: left;
+}
+.sidebar nav button.active, .sidebar nav button:hover { background: #20262b; color: #ffffff; border-color: #303840; }
+.logout { margin-top: auto; padding: 10px 12px; text-align: left; }
+
+.workspace { padding: 28px; display: grid; gap: 18px; align-content: start; }
+.topbar, .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 16px;
+}
+.topbar p, .section-header p { margin: 0 0 6px; color: #45d68a; font-size: 13px; font-weight: 700; }
+.topbar h1, .section-header h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
+
+.panel, .announcement, .notice {
+  border: 1px solid #2c3339;
+  background: #191d21;
+  border-radius: 8px;
+}
+.panel { padding: 18px; }
+.announcement-form { display: grid; gap: 14px; }
+.field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+input, textarea, select {
+  width: 100%;
+  border: 1px solid #343c44;
+  border-radius: 8px;
+  background: #111417;
+  color: #eef2f5;
+  padding: 11px 12px;
+  outline: none;
+}
+textarea { min-height: 130px; resize: vertical; }
+input:focus, textarea:focus, select:focus { border-color: #45d68a; box-shadow: 0 0 0 3px rgb(69 214 138 / 16%); }
+.form-actions { display: flex; gap: 10px; }
+.primary, .login-panel button {
+  border: 0;
+  border-radius: 8px;
+  background: #45d68a;
+  color: #06130c;
+  font-weight: 800;
+  padding: 11px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-actions button:not(.primary) {
+  border: 1px solid #343c44;
+  background: #20262b;
+  color: #f3f5f7;
+  border-radius: 8px;
+  padding: 11px 14px;
+}
+
+.list { display: grid; gap: 12px; }
+.announcement {
+  padding: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.announcement-main { display: flex; gap: 14px; min-width: 0; }
+.icon-cell {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #45d68a;
+  background: #20262b;
+  flex: 0 0 auto;
+}
+.announcement h3 { margin: 0 0 6px; font-size: 16px; }
+.announcement p { margin: 0 0 10px; color: #a9b1ba; max-width: 78ch; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; color: #87919b; font-size: 13px; }
+.meta span { background: #111417; border: 1px solid #2d343b; border-radius: 999px; padding: 4px 8px; }
+.status.scheduled { color: #45d68a; }
+.status.sent { color: #8fb4ff; }
+.status.disabled { color: #f0c36a; }
+.row-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.row-actions button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  background: #20262b;
+  border-color: #303840;
+}
+.row-actions button:hover { color: #ffffff; border-color: #45d68a; }
+.row-actions .danger:hover { color: #ff6b86; border-color: #ff6b86; }
+.empty { border: 1px dashed #343c44; border-radius: 8px; color: #87919b; padding: 28px; text-align: center; }
+.notice { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; color: #ffd0d8; border-color: #87384a; }
+
+.users-panel, .settings-panel { display: grid; gap: 18px; }
+.search-box { position: relative; }
+.suggestions {
+  position: absolute;
+  z-index: 2;
+  inset: calc(100% + 6px) 0 auto 0;
+  background: #111417;
+  border: 1px solid #343c44;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.suggestions button, .user-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #242b31;
+  background: transparent;
+  color: #eef2f5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  text-align: left;
+}
+.suggestions img, .user-row img { width: 30px; height: 30px; border-radius: 8px; }
+.suggestions small, .user-row span { color: #87919b; }
+.user-list { display: grid; gap: 8px; }
+.user-row { border: 1px solid #2c3339; border-radius: 8px; background: #111417; }
+.user-row button { margin-left: auto; border: 0; background: transparent; color: #ff6b86; }
+.settings-panel dl { display: grid; gap: 10px; margin: 0; }
+.settings-panel dl div { display: grid; grid-template-columns: 180px 1fr; gap: 16px; padding: 12px; background: #111417; border-radius: 8px; }
+dt { color: #87919b; }
+dd { margin: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 860px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; }
+  .field-grid { grid-template-columns: 1fr; }
+  .topbar, .section-header, .announcement { align-items: stretch; flex-direction: column; }
+}

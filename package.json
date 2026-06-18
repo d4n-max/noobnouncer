@@ -1,0 +1,20 @@
+{
+  "name": "discord-announcement-scheduler",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run build -w @scheduler/shared && npm run dev -w @scheduler/web",
+    "dev:bot": "npm run build -w @scheduler/shared && npm run dev -w @scheduler/bot",
+    "build": "npm run build -w @scheduler/shared && npm run build -w @scheduler/bot && npm run build -w @scheduler/web",
+    "typecheck": "npm run typecheck -w @scheduler/shared && npm run build -w @scheduler/shared && npm run typecheck -w @scheduler/bot && npm run typecheck -w @scheduler/web",
+    "start": "npm run start -w @scheduler/bot"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
