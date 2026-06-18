@@ -107,6 +107,17 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .quick-times button:hover { border-color: #45d68a; color: #ffffff; }
+.message-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.message-tools select { width: min(280px, 100%); }
+.message-tools span {
+  color: #87919b;
+  font-size: 13px;
+}
 input, textarea, select {
   width: 100%;
   border: 1px solid #343c44;

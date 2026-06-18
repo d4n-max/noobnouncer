@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Announcement, repeatTypes } from "@scheduler/shared";
 import { issueAdminToken, requireAdmin } from "./auth.js";
-import { client, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
+import { client, getGuildRoles, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -89,6 +89,16 @@ export function createApi() {
   app.get("/api/guilds/:guildId/channels", async (req, res) => {
     const guild = await syncGuild(req.params.guildId);
     res.json(await syncGuildChannels(guild));
+  });
+
+  app.get("/api/guilds/:guildId/roles", async (req, res) => {
+    try {
+      res.json(await getGuildRoles(req.params.guildId));
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : "Could not load roles"
+      });
+    }
   });
 
   app.get("/api/guilds/:guildId/users", async (req, res) => {

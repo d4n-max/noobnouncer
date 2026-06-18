@@ -4,6 +4,7 @@ import {
   Guild,
   GatewayIntentBits,
   PermissionFlagsBits,
+  Role,
   TextBasedChannel
 } from "discord.js";
 import { supabase } from "./supabase.js";
@@ -75,4 +76,22 @@ export async function syncAllGuilds() {
   );
 
   return guilds;
+}
+
+export async function getGuildRoles(guildId: string) {
+  const guild = await client.guilds.fetch(guildId);
+  const roles = await guild.roles.fetch();
+
+  return roles
+    .filter((role): role is Role => Boolean(role) && role.id !== guild.id)
+    .sort((left, right) => {
+      const positionDelta = right.position - left.position;
+      return positionDelta || left.name.localeCompare(right.name);
+    })
+    .map((role) => ({
+      id: role.id,
+      name: role.name,
+      color: role.hexColor === "#000000" ? null : role.hexColor,
+      mentionable: role.mentionable
+    }));
 }

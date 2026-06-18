@@ -19,6 +19,7 @@ import { TIMEZONE_OPTIONS } from "./timezones";
 
 type Guild = { id: string; name: string; icon_url: string | null };
 type Channel = { id: string; guild_id: string; name: string; can_send: boolean };
+type Role = { id: string; name: string; color: string | null; mentionable: boolean };
 type DiscordUser = {
   discord_user_id: string;
   username: string;
@@ -91,6 +92,7 @@ export function App() {
   const [page, setPage] = useState<Page>("announcements");
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [allowedUsers, setAllowedUsers] = useState<AllowedUser[]>([]);
   const [form, setForm] = useState(defaultForm);
@@ -125,6 +127,7 @@ export function App() {
     if (initialGuild) {
       const loadedChannels = await api<Channel[]>(`/guilds/${initialGuild}/channels`);
       setChannels(loadedChannels);
+      setRoles(await api<Role[]>(`/guilds/${initialGuild}/roles`));
       const storedChannelId = getStoredChannelForGuild(initialGuild);
       setForm((current) => {
         const nextChannelId =
@@ -137,6 +140,7 @@ export function App() {
       });
     } else {
       setChannels([]);
+      setRoles([]);
       setToast("Bot needs to be invited to the server first");
     }
 
@@ -171,6 +175,7 @@ export function App() {
             ""
       }));
     });
+    void api<Role[]>(`/guilds/${selectedGuild}/roles`).then(setRoles).catch((err) => setError(err.message));
     void api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`).then(setAllowedUsers);
   }, [selectedGuild, token]);
 
@@ -286,6 +291,21 @@ export function App() {
             .plus({ minutes: kind === "plus15" ? 15 : kind === "plus30" ? 30 : 60 })
             .toFormat("HH:mm");
     setForm((current) => ({ ...current, time: nextTime }));
+  }
+
+  function insertRoleMention(roleId: string) {
+    const role = roles.find((item) => item.id === roleId);
+    if (!role) return;
+
+    const mention = `<@&${role.id}>`;
+    setForm((current) => ({
+      ...current,
+      message: current.message ? `${current.message} ${mention}` : mention
+    }));
+
+    if (!role.mentionable) {
+      setToast("This role may not ping unless it is mentionable or the bot has permission to mention roles.");
+    }
   }
 
   function editAnnouncement(item: Announcement) {
@@ -415,6 +435,17 @@ export function App() {
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
                   </select>
+                </div>
+                <div className="message-tools">
+                  <select defaultValue="" onChange={(e) => { insertRoleMention(e.target.value); e.target.value = ""; }}>
+                    <option value="" disabled>Mention role</option>
+                    {roles.map((role) => (
+                      <option key={role.id} value={role.id}>
+                        {role.name}{role.mentionable ? "" : " (may not ping)"}
+                      </option>
+                    ))}
+                  </select>
+                  {!roles.length && <span>No roles available for this server.</span>}
                 </div>
                 <textarea placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required />
                 {form.guild_id && !channels.length && (

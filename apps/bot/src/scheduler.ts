@@ -55,7 +55,17 @@ async function sendAnnouncement(item: DueAnnouncement) {
   if (!channel?.isTextBased() || !("send" in channel)) {
     throw new Error("Channel is not text based or could not be fetched");
   }
-  await channel.send(item.message);
+
+  const roleIds = Array.from(item.message.matchAll(/<@&(\d{17,20})>/g), (match) => match[1]);
+  await channel.send({
+    content: item.message,
+    allowedMentions: {
+      parse: [],
+      roles: [...new Set(roleIds)],
+      users: [],
+      repliedUser: false
+    }
+  });
 }
 
 export async function runSchedulerOnce() {
