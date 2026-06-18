@@ -27,17 +27,64 @@ type DiscordUser = {
 };
 type Page = "announcements" | "users" | "settings";
 
+const preferenceKeys = {
+  guildId: "noobnouncer_last_guild_id",
+  channelByGuild: "noobnouncer_last_channel_by_guild",
+  date: "noobnouncer_last_date"
+};
+
+function todayUtcDate() {
+  return DateTime.now().setZone("UTC").toISODate() ?? "";
+}
+
+function getStoredDate() {
+  return localStorage.getItem(preferenceKeys.date) || todayUtcDate();
+}
+
+function getStoredChannelMap(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(preferenceKeys.channelByGuild) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function getStoredChannelForGuild(guildId: string) {
+  return getStoredChannelMap()[guildId] || "";
+}
+
+function storeChannelForGuild(guildId: string, channelId: string) {
+  if (!guildId || !channelId) return;
+  localStorage.setItem(
+    preferenceKeys.channelByGuild,
+    JSON.stringify({ ...getStoredChannelMap(), [guildId]: channelId })
+  );
+}
+
 const defaultForm = {
   title: "",
   guild_id: "",
   channel_id: "",
   message: "",
-  date: DateTime.now().setZone("Europe/Bucharest").toISODate() ?? "",
-  time: DateTime.now().setZone("Europe/Bucharest").plus({ hours: 1 }).toFormat("HH:mm"),
-  timezone: "Europe/Bucharest",
+  date: getStoredDate(),
+  time: "",
+  timezone: "UTC",
   repeat_type: "none",
   status: "scheduled"
 };
+
+function createEmptyForm(overrides: Partial<typeof defaultForm> = {}) {
+  return {
+    ...defaultForm,
+    date: getStoredDate(),
+    time: "",
+    timezone: "UTC",
+    repeat_type: "none",
+    title: "",
+    message: "",
+    ...overrides
+  };
+}
 
 export function App() {
   const [token, setToken] = useState(localStorage.getItem("scheduler_token"));
@@ -48,7 +95,7 @@ export function App() {
   const [allowedUsers, setAllowedUsers] = useState<AllowedUser[]>([]);
   const [form, setForm] = useState(defaultForm);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [selectedGuild, setSelectedGuild] = useState("");
+  const [selectedGuild, setSelectedGuild] = useState(localStorage.getItem(preferenceKeys.guildId) || "");
   const [userSearch, setUserSearch] = useState("");
   const [suggestions, setSuggestions] = useState<DiscordUser[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
@@ -64,14 +111,30 @@ export function App() {
   async function loadGuilds(preferredGuildId = selectedGuild) {
     const loadedGuilds = await api<Guild[]>("/guilds");
     setGuilds(loadedGuilds);
-    const initialGuild = preferredGuildId || form.guild_id || loadedGuilds[0]?.id || "";
+    const storedGuildId = localStorage.getItem(preferenceKeys.guildId) || "";
+    const initialGuild =
+      loadedGuilds.find((guild) => guild.id === preferredGuildId)?.id ||
+      loadedGuilds.find((guild) => guild.id === storedGuildId)?.id ||
+      loadedGuilds.find((guild) => guild.id === form.guild_id)?.id ||
+      loadedGuilds[0]?.id ||
+      "";
     setSelectedGuild(initialGuild);
-    setForm((current) => ({ ...current, guild_id: current.guild_id || initialGuild }));
+    if (initialGuild) localStorage.setItem(preferenceKeys.guildId, initialGuild);
+    setForm((current) => ({ ...current, guild_id: initialGuild, date: current.date || getStoredDate() }));
 
     if (initialGuild) {
       const loadedChannels = await api<Channel[]>(`/guilds/${initialGuild}/channels`);
       setChannels(loadedChannels);
-      setForm((current) => ({ ...current, channel_id: current.channel_id || loadedChannels[0]?.id || "" }));
+      const storedChannelId = getStoredChannelForGuild(initialGuild);
+      setForm((current) => {
+        const nextChannelId =
+          loadedChannels.find((channel) => channel.id === current.channel_id)?.id ||
+          loadedChannels.find((channel) => channel.id === storedChannelId)?.id ||
+          loadedChannels[0]?.id ||
+          "";
+        if (nextChannelId) storeChannelForGuild(initialGuild, nextChannelId);
+        return { ...current, channel_id: nextChannelId };
+      });
     } else {
       setChannels([]);
       setToast("Bot needs to be invited to the server first");
@@ -95,6 +158,7 @@ export function App() {
 
   useEffect(() => {
     if (!selectedGuild || !token) return;
+    localStorage.setItem(preferenceKeys.guildId, selectedGuild);
     void api<Channel[]>(`/guilds/${selectedGuild}/channels`).then((loadedChannels) => {
       setChannels(loadedChannels);
       setForm((current) => ({
@@ -102,11 +166,25 @@ export function App() {
         guild_id: selectedGuild,
         channel_id: loadedChannels.some((channel) => channel.id === current.channel_id)
           ? current.channel_id
-          : loadedChannels[0]?.id ?? ""
+          : loadedChannels.find((channel) => channel.id === getStoredChannelForGuild(selectedGuild))?.id ||
+            loadedChannels[0]?.id ||
+            ""
       }));
     });
     void api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`).then(setAllowedUsers);
   }, [selectedGuild, token]);
+
+  useEffect(() => {
+    if (form.guild_id && form.channel_id) {
+      storeChannelForGuild(form.guild_id, form.channel_id);
+    }
+  }, [form.guild_id, form.channel_id]);
+
+  useEffect(() => {
+    if (form.date) {
+      localStorage.setItem(preferenceKeys.date, form.date);
+    }
+  }, [form.date]);
 
   async function refreshGuilds() {
     setIsRefreshingGuilds(true);
@@ -117,6 +195,7 @@ export function App() {
 
       const nextGuildId =
         result.guilds.find((guild) => guild.id === selectedGuild)?.id ||
+        result.guilds.find((guild) => guild.id === localStorage.getItem(preferenceKeys.guildId))?.id ||
         result.guilds.find((guild) => !beforeIds.has(guild.id))?.id ||
         result.guilds[0]?.id ||
         "";
@@ -166,6 +245,11 @@ export function App() {
 
   async function saveAnnouncement(event: FormEvent) {
     event.preventDefault();
+    if (!form.time) {
+      setError("Please select a time.");
+      return;
+    }
+
     const scheduledAt = DateTime.fromISO(`${form.date}T${form.time}`, { zone: form.timezone }).toUTC().toISO();
     if (!scheduledAt) return;
 
@@ -184,9 +268,24 @@ export function App() {
     } else {
       await api("/announcements", { method: "POST", body: JSON.stringify(payload) });
     }
-    setForm({ ...defaultForm, guild_id: selectedGuild, channel_id: channels[0]?.id ?? "" });
+    localStorage.setItem(preferenceKeys.guildId, form.guild_id);
+    localStorage.setItem(preferenceKeys.date, form.date);
+    storeChannelForGuild(form.guild_id, form.channel_id);
+    setForm(createEmptyForm({ guild_id: form.guild_id, channel_id: form.channel_id, date: form.date }));
     setEditingId(null);
     setAnnouncements(await api<Announcement[]>("/announcements"));
+  }
+
+  function setQuickTime(kind: "plus15" | "plus30" | "plus60" | "tonight") {
+    const zone = form.timezone || "UTC";
+    const nextTime =
+      kind === "tonight"
+        ? "20:00"
+        : DateTime.now()
+            .setZone(zone)
+            .plus({ minutes: kind === "plus15" ? 15 : kind === "plus30" ? 30 : 60 })
+            .toFormat("HH:mm");
+    setForm((current) => ({ ...current, time: nextTime }));
   }
 
   function editAnnouncement(item: Announcement) {
@@ -294,7 +393,15 @@ export function App() {
                     {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
                   </select>
                   <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
-                  <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} required />
+                  <div className="time-field">
+                    <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
+                    <div className="quick-times">
+                      <button type="button" onClick={() => setQuickTime("plus15")}>+15 min</button>
+                      <button type="button" onClick={() => setQuickTime("plus30")}>+30 min</button>
+                      <button type="button" onClick={() => setQuickTime("plus60")}>+1 hour</button>
+                      <button type="button" onClick={() => setQuickTime("tonight")}>Tonight 20:00</button>
+                    </div>
+                  </div>
                   <select value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })}>
                     {TIMEZONE_OPTIONS.map((timezone) => (
                       <option key={timezone} value={timezone}>
@@ -317,7 +424,7 @@ export function App() {
                 )}
                 <div className="form-actions">
                   <button className="primary" type="submit" disabled={!channels.length}><Plus /> {editingId ? "Save changes" : "Create announcement"}</button>
-                  {editingId && <button type="button" onClick={() => { setEditingId(null); setForm(defaultForm); }}>Cancel</button>}
+                  {editingId && <button type="button" onClick={() => { setEditingId(null); setForm(createEmptyForm({ guild_id: selectedGuild, channel_id: form.channel_id, date: form.date })); }}>Cancel</button>}
                 </div>
               </form>
             </section>

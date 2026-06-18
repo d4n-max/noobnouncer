@@ -90,6 +90,23 @@ button { cursor: pointer; }
 .panel { padding: 18px; }
 .announcement-form { display: grid; gap: 14px; }
 .field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.time-field { display: grid; gap: 8px; }
+.quick-times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.quick-times button {
+  min-height: 32px;
+  border: 1px solid #343c44;
+  border-radius: 8px;
+  background: #20262b;
+  color: #cfd6dd;
+  padding: 6px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.quick-times button:hover { border-color: #45d68a; color: #ffffff; }
 input, textarea, select {
   width: 100%;
   border: 1px solid #343c44;
