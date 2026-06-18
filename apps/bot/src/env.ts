@@ -8,6 +8,7 @@ config({ path: path.resolve(__dirname, "../../../.env") });
 
 const envSchema = z.object({
   DISCORD_TOKEN: z.string().min(1),
+  DISCORD_CLIENT_ID: z.string().min(1).optional(),
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ADMIN_PASSWORD: z.string().min(8),

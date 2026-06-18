@@ -82,7 +82,7 @@ button { cursor: pointer; }
 .topbar p, .section-header p { margin: 0 0 6px; color: #45d68a; font-size: 13px; font-weight: 700; }
 .topbar h1, .section-header h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
 
-.panel, .announcement, .notice {
+.panel, .announcement, .notice, .toast {
   border: 1px solid #2c3339;
   background: #191d21;
   border-radius: 8px;
@@ -160,6 +160,39 @@ input:focus, textarea:focus, select:focus { border-color: #45d68a; box-shadow: 0
 .row-actions .danger:hover { color: #ff6b86; border-color: #ff6b86; }
 .empty { border: 1px dashed #343c44; border-radius: 8px; color: #87919b; padding: 28px; text-align: center; }
 .notice { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; color: #ffd0d8; border-color: #87384a; }
+.toast { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; color: #d7ffe7; border-color: #2d7d55; }
+.notice button, .toast button { width: 30px; height: 30px; display: grid; place-items: center; }
+
+.server-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.server-controls select { min-width: 220px; }
+.server-controls button {
+  border: 1px solid #343c44;
+  border-radius: 8px;
+  background: #20262b;
+  color: #f3f5f7;
+  padding: 10px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.server-controls button:hover:not(:disabled) { border-color: #45d68a; }
+.server-controls button:disabled, .primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.helper-message {
+  border: 1px solid #5a4830;
+  background: #211d18;
+  color: #f0c36a;
+  border-radius: 8px;
+  padding: 11px 12px;
+}
 
 .users-panel, .settings-panel { display: grid; gap: 18px; }
 .search-box { position: relative; }
@@ -199,4 +232,6 @@ dd { margin: 0; overflow-wrap: anywhere; }
   .sidebar { position: static; height: auto; }
   .field-grid { grid-template-columns: 1fr; }
   .topbar, .section-header, .announcement { align-items: stretch; flex-direction: column; }
+  .server-controls { justify-content: stretch; }
+  .server-controls button { justify-content: center; }
 }

@@ -3,11 +3,10 @@ import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ChannelType } from "discord.js";
 import { z } from "zod";
 import { Announcement, repeatTypes } from "@scheduler/shared";
 import { issueAdminToken, requireAdmin } from "./auth.js";
-import { client, canBotSend, syncGuild } from "./discord.js";
+import { client, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -45,7 +44,7 @@ export function createApi() {
   app.use("/api", requireAdmin);
 
   app.get("/api/guilds", async (_req, res) => {
-    const guilds = await Promise.all(client.guilds.cache.map((guild) => syncGuild(guild.id)));
+    const guilds = await syncAllGuilds();
     res.json(
       guilds.map((guild) => ({
         id: guild.id,
@@ -55,20 +54,41 @@ export function createApi() {
     );
   });
 
+  app.post("/api/guilds/refresh", async (_req, res) => {
+    const { data: existingGuilds, error } = await supabase.from("guilds").select("id");
+    if (error) return res.status(500).json({ error: error.message });
+
+    const previousIds = new Set((existingGuilds ?? []).map((guild) => guild.id));
+    const guilds = await syncAllGuilds();
+    const payload = guilds.map((guild) => ({
+      id: guild.id,
+      name: guild.name,
+      icon_url: guild.iconURL()
+    }));
+
+    res.json({
+      guilds: payload,
+      added: payload.filter((guild) => !previousIds.has(guild.id)).length
+    });
+  });
+
+  app.get("/api/bot/invite-url", (_req, res) => {
+    if (!env.DISCORD_CLIENT_ID) {
+      res.status(400).json({ error: "DISCORD_CLIENT_ID is not configured" });
+      return;
+    }
+
+    const permissions = String(1024 + 2048 + 65536);
+    const url = new URL("https://discord.com/oauth2/authorize");
+    url.searchParams.set("client_id", env.DISCORD_CLIENT_ID);
+    url.searchParams.set("scope", "bot");
+    url.searchParams.set("permissions", permissions);
+    res.json({ url: url.toString() });
+  });
+
   app.get("/api/guilds/:guildId/channels", async (req, res) => {
     const guild = await syncGuild(req.params.guildId);
-    const channels = await guild.channels.fetch();
-    res.json(
-      channels
-        .filter((channel) => channel?.type === ChannelType.GuildText)
-        .map((channel) => ({
-          id: channel!.id,
-          guild_id: guild.id,
-          name: channel!.name,
-          can_send: canBotSend(channel!)
-        }))
-        .filter((channel) => channel.can_send)
-    );
+    res.json(await syncGuildChannels(guild));
   });
 
   app.get("/api/guilds/:guildId/users", async (req, res) => {
@@ -160,6 +180,7 @@ export function createApi() {
   app.get("/api/settings", (_req, res) => {
     res.json({
       defaultTimezone: env.DEFAULT_TIMEZONE,
+      inviteAvailable: Boolean(env.DISCORD_CLIENT_ID),
       botUser: client.user ? { id: client.user.id, username: client.user.username } : null,
       guildCount: client.guilds.cache.size
     });

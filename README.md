@@ -14,18 +14,19 @@ supabase          Database schema
 ## Discord Setup
 
 1. Open the Discord Developer Portal and create an application.
-2. Add a bot, copy the bot token, and put it in `.env` as `DISCORD_TOKEN`.
-3. Enable these privileged gateway intents for the bot:
+2. On the General Information page, copy the Application ID and put it in `.env` as `DISCORD_CLIENT_ID`.
+3. Add a bot, copy the bot token, and put it in `.env` as `DISCORD_TOKEN`.
+4. Enable these privileged gateway intents for the bot:
    - Message Content Intent
    - Server Members Intent
-4. Invite the bot with these permissions:
+5. Invite the bot with these permissions:
    - View Channels
    - Send Messages
    - Read Message History
-5. Use this invite URL shape:
+6. Use the dashboard's Invite bot button, or use this invite URL shape:
 
 ```txt
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=274878024704&integration_type=0&scope=bot
+https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=68608&scope=bot
 ```
 
 ## Supabase Setup
@@ -63,6 +64,7 @@ The safe `.env.example` file contains placeholders for:
 
 ```txt
 DISCORD_TOKEN=
+DISCORD_CLIENT_ID=
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 ADMIN_PASSWORD=
@@ -80,6 +82,8 @@ CORS_ORIGIN=http://localhost:5173
 5. Keep the bot process running. The scheduler checks once per minute.
 
 The default timezone is `Europe/Bucharest`. Times are saved as UTC in Supabase.
+
+Servers are not added manually. Invite the bot to another Discord server with the Invite bot button, then click Refresh servers in the dashboard. The new server appears after Discord adds the bot and the backend syncs the live guild list. If a server has no channels in the dashboard, check that the bot can view and send messages in at least one text channel.
 
 ## Allowed Users
 

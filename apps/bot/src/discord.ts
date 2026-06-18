@@ -1,6 +1,7 @@
 import {
   ChannelType,
   Client,
+  Guild,
   GatewayIntentBits,
   PermissionFlagsBits,
   TextBasedChannel
@@ -25,15 +26,17 @@ export function canBotSend(channel: TextBasedChannel): boolean {
   );
 }
 
-export async function syncGuild(guildId: string) {
-  const guild = await client.guilds.fetch(guildId);
-  await supabase.from("guilds").upsert({
+export async function upsertGuild(guild: Guild) {
+  const { error } = await supabase.from("guilds").upsert({
     id: guild.id,
     name: guild.name,
     icon_url: guild.iconURL(),
     updated_at: new Date().toISOString()
   });
+  if (error) throw error;
+}
 
+export async function syncGuildChannels(guild: Guild) {
   const channels = await guild.channels.fetch();
   const rows = channels
     .filter((channel) => channel?.type === ChannelType.GuildText)
@@ -42,13 +45,34 @@ export async function syncGuild(guildId: string) {
       guild_id: guild.id,
       name: channel!.name,
       type: "text",
-      can_send: canBotSend(channel as TextBasedChannel),
-      updated_at: new Date().toISOString()
-    }));
+        can_send: canBotSend(channel as TextBasedChannel),
+        updated_at: new Date().toISOString()
+      }));
 
   if (rows.length) {
-    await supabase.from("channels").upsert(rows);
+    const { error } = await supabase.from("channels").upsert(rows);
+    if (error) throw error;
   }
 
+  return rows.filter((channel) => channel.can_send);
+}
+
+export async function syncGuild(guildId: string) {
+  const guild = await client.guilds.fetch(guildId);
+  await upsertGuild(guild);
+  await syncGuildChannels(guild);
   return guild;
+}
+
+export async function syncAllGuilds() {
+  const liveGuilds = await client.guilds.fetch();
+  const guilds = await Promise.all(
+    liveGuilds.map(async (liveGuild) => {
+      const guild = await client.guilds.fetch(liveGuild.id);
+      await upsertGuild(guild);
+      return guild;
+    })
+  );
+
+  return guilds;
 }

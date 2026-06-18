@@ -1,6 +1,8 @@
 import {
+  ArrowClockwise,
   CalendarBlank,
   GearSix,
+  LinkSimple,
   ListBullets,
   PencilSimple,
   Plus,
@@ -51,23 +53,36 @@ export function App() {
   const [suggestions, setSuggestions] = useState<DiscordUser[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [isRefreshingGuilds, setIsRefreshingGuilds] = useState(false);
 
   const channelById = useMemo(
     () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
     [channels]
   );
 
-  async function loadBase() {
+  async function loadGuilds(preferredGuildId = selectedGuild) {
     const loadedGuilds = await api<Guild[]>("/guilds");
     setGuilds(loadedGuilds);
-    const initialGuild = form.guild_id || selectedGuild || loadedGuilds[0]?.id || "";
+    const initialGuild = preferredGuildId || form.guild_id || loadedGuilds[0]?.id || "";
     setSelectedGuild(initialGuild);
     setForm((current) => ({ ...current, guild_id: current.guild_id || initialGuild }));
+
     if (initialGuild) {
       const loadedChannels = await api<Channel[]>(`/guilds/${initialGuild}/channels`);
       setChannels(loadedChannels);
       setForm((current) => ({ ...current, channel_id: current.channel_id || loadedChannels[0]?.id || "" }));
+    } else {
+      setChannels([]);
+      setToast("Bot needs to be invited to the server first");
     }
+
+    return loadedGuilds;
+  }
+
+  async function loadBase() {
+    const loadedGuilds = await loadGuilds();
+    const initialGuild = selectedGuild || form.guild_id || loadedGuilds[0]?.id || "";
     setAnnouncements(await api<Announcement[]>("/announcements"));
     setAllowedUsers(await api<AllowedUser[]>(initialGuild ? `/allowed-users?guild_id=${initialGuild}` : "/allowed-users"));
     setSettings(await api<Record<string, unknown>>("/settings"));
@@ -92,6 +107,41 @@ export function App() {
     });
     void api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`).then(setAllowedUsers);
   }, [selectedGuild, token]);
+
+  async function refreshGuilds() {
+    setIsRefreshingGuilds(true);
+    try {
+      const beforeIds = new Set(guilds.map((guild) => guild.id));
+      const result = await api<{ guilds: Guild[]; added: number }>("/guilds/refresh", { method: "POST" });
+      setGuilds(result.guilds);
+
+      const nextGuildId =
+        result.guilds.find((guild) => guild.id === selectedGuild)?.id ||
+        result.guilds.find((guild) => !beforeIds.has(guild.id))?.id ||
+        result.guilds[0]?.id ||
+        "";
+      setSelectedGuild(nextGuildId);
+
+      if (!result.guilds.length) {
+        setToast("Bot needs to be invited to the server first");
+      } else {
+        setToast(result.added > 0 ? "Servers refreshed" : "No new servers found");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh servers");
+    } finally {
+      setIsRefreshingGuilds(false);
+    }
+  }
+
+  async function openInviteUrl() {
+    try {
+      const { url } = await api<{ url: string }>("/bot/invite-url");
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create invite link");
+    }
+  }
 
   useEffect(() => {
     if (!selectedGuild || userSearch.trim().length < 2) {
@@ -212,6 +262,7 @@ export function App() {
 
       <main className="workspace">
         {error && <div className="notice"><span>{error}</span><button onClick={() => setError("")}><X /></button></div>}
+        {toast && <div className="toast"><span>{toast}</span><button onClick={() => setToast("")}><X /></button></div>}
         {page === "announcements" && (
           <>
             <header className="topbar">
@@ -219,9 +270,17 @@ export function App() {
                 <p>Announcements</p>
                 <h1>Schedule Discord messages</h1>
               </div>
-              <select value={selectedGuild} onChange={(event) => setSelectedGuild(event.target.value)}>
-                {guilds.map((guild) => <option key={guild.id} value={guild.id}>{guild.name}</option>)}
-              </select>
+              <div className="server-controls">
+                <select value={selectedGuild} onChange={(event) => setSelectedGuild(event.target.value)}>
+                  {guilds.map((guild) => <option key={guild.id} value={guild.id}>{guild.name}</option>)}
+                </select>
+                <button type="button" onClick={refreshGuilds} disabled={isRefreshingGuilds}>
+                  <ArrowClockwise /> {isRefreshingGuilds ? "Refreshing" : "Refresh servers"}
+                </button>
+                <button type="button" onClick={openInviteUrl}>
+                  <LinkSimple /> Invite bot
+                </button>
+              </div>
             </header>
 
             <section className="panel">
@@ -251,8 +310,13 @@ export function App() {
                   </select>
                 </div>
                 <textarea placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required />
+                {form.guild_id && !channels.length && (
+                  <div className="helper-message">
+                    No available text channels found. The bot may need View Channels and Send Messages permissions in this server.
+                  </div>
+                )}
                 <div className="form-actions">
-                  <button className="primary" type="submit"><Plus /> {editingId ? "Save changes" : "Create announcement"}</button>
+                  <button className="primary" type="submit" disabled={!channels.length}><Plus /> {editingId ? "Save changes" : "Create announcement"}</button>
                   {editingId && <button type="button" onClick={() => { setEditingId(null); setForm(defaultForm); }}>Cancel</button>}
                 </div>
               </form>
@@ -323,7 +387,15 @@ export function App() {
 
         {page === "settings" && (
           <section className="panel settings-panel">
-            <header className="section-header"><div><p>Settings</p><h1>Runtime status</h1></div></header>
+            <header className="section-header">
+              <div><p>Settings</p><h1>Runtime status</h1></div>
+              <div className="server-controls">
+                <button type="button" onClick={refreshGuilds} disabled={isRefreshingGuilds}>
+                  <ArrowClockwise /> {isRefreshingGuilds ? "Refreshing" : "Refresh servers"}
+                </button>
+                <button type="button" onClick={openInviteUrl}><LinkSimple /> Invite bot</button>
+              </div>
+            </header>
             <dl>
               <div><dt>Default timezone</dt><dd>{String(settings?.defaultTimezone ?? "Europe/Bucharest")}</dd></div>
               <div><dt>Bot user</dt><dd>{settings?.botUser ? JSON.stringify(settings.botUser) : "Not ready"}</dd></div>
