@@ -12,11 +12,12 @@ import {
   X
 } from "@phosphor-icons/react";
 import { DateTime } from "luxon";
-import { ANNOUNCEMENT_DELETE_AFTER_MINUTES } from "@scheduler/shared";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { AllowedUser, Announcement } from "@scheduler/shared";
 import { api, login } from "./api";
 import { TIMEZONE_OPTIONS } from "./timezones";
+
+const AUTO_DELETE_LABEL = "1 hour";
 
 type Guild = { id: string; name: string; icon_url: string | null };
 type Channel = { id: string; guild_id: string; name: string; can_send: boolean };
@@ -473,7 +474,7 @@ export function App() {
                         <span>#{channelById[item.channel_id]?.name ?? item.channel_id}</span>
                         <span>{DateTime.fromISO(item.scheduled_at).setZone(item.timezone).toFormat("DD T")}</span>
                         <span>{item.repeat_type}</span>
-                        <span>Auto-delete: {ANNOUNCEMENT_DELETE_AFTER_MINUTES} min</span>
+                        <span>Auto-delete: {AUTO_DELETE_LABEL}</span>
                         <span className={`status ${item.status}`}>{item.status}</span>
                       </div>
                     </div>

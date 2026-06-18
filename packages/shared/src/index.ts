@@ -1,6 +1,6 @@
 export const repeatTypes = ["none", "daily", "weekly", "monthly"] as const;
 export const announcementStatuses = ["scheduled", "sent", "disabled"] as const;
-export const ANNOUNCEMENT_DELETE_AFTER_MINUTES = 30;
+export const ANNOUNCEMENT_DELETE_AFTER_MINUTES = 60;
 
 export type RepeatType = (typeof repeatTypes)[number];
 export type AnnouncementStatus = (typeof announcementStatuses)[number];

@@ -108,11 +108,11 @@ The worker runs every minute. It:
 - finds due announcements with `status = scheduled`
 - claims each row with a short `locked_until` database lock
 - sends the message to the Discord channel
-- stores the Discord message id and schedules auto-delete for 30 minutes later
+- stores the Discord message id and schedules auto-delete for 1 hour later
 - marks one-time announcements as `sent`
 - moves recurring announcements to the next daily, weekly, or monthly `scheduled_at`
 - writes `delivery_logs` rows for sent and failed attempts
-- deletes posted announcement messages after 30 minutes using persisted `delivery_logs` state
+- deletes posted announcement messages after 1 hour using persisted `delivery_logs` state
 
 For auto-delete to work, the bot needs View Channel, Send Messages, and Read Message History in the target channel. Manage Messages is only needed if the bot ever deletes messages not created by itself.
 
