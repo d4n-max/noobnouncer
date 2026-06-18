@@ -53,8 +53,34 @@ create table if not exists public.delivery_logs (
   channel_id text not null references public.channels(id) on delete cascade,
   status text not null check (status in ('sent', 'failed')),
   error_message text,
-  sent_at timestamptz not null default now()
+  sent_at timestamptz not null default now(),
+  discord_message_id text,
+  delete_at timestamptz,
+  deleted_at timestamptz,
+  delete_status text check (delete_status in ('pending', 'deleted', 'failed')),
+  delete_error_message text
 );
+
+alter table public.delivery_logs add column if not exists discord_message_id text;
+alter table public.delivery_logs add column if not exists delete_at timestamptz;
+alter table public.delivery_logs add column if not exists deleted_at timestamptz;
+alter table public.delivery_logs add column if not exists delete_status text;
+alter table public.delivery_logs add column if not exists delete_error_message text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'delivery_logs_delete_status_check'
+      and conrelid = 'public.delivery_logs'::regclass
+  ) then
+    alter table public.delivery_logs
+      add constraint delivery_logs_delete_status_check
+      check (delete_status in ('pending', 'deleted', 'failed'));
+  end if;
+end;
+$$;
 
 create index if not exists announcements_due_idx
   on public.announcements (status, scheduled_at)
@@ -63,6 +89,9 @@ create index if not exists announcements_due_idx
 create index if not exists announcements_guild_idx on public.announcements (guild_id);
 create index if not exists allowed_users_guild_idx on public.allowed_users (guild_id);
 create index if not exists delivery_logs_announcement_idx on public.delivery_logs (announcement_id);
+create index if not exists delivery_logs_pending_delete_idx
+  on public.delivery_logs (delete_status, delete_at)
+  where delete_status = 'pending';
 
 create or replace function public.touch_updated_at()
 returns trigger
