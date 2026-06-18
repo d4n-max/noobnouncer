@@ -1,6 +1,11 @@
+# Local environment files can contain real secrets.
+.env
+.env.*
+!.env.example
+apps/bot/.env
+apps/bot/.env.*
+apps/web/.env
+apps/web/.env.*
+
 node_modules
 dist
-.env
-.env.local
-.DS_Store
-*.log

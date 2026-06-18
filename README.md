@@ -40,9 +40,10 @@ The web dashboard never receives the service role key. It talks to the local Exp
 
 ```bash
 npm install
+cp .env.example .env
 ```
 
-Create a local `.env` file with your Discord, Supabase, admin, and Vite API values. Do not commit this file.
+Fill `.env` locally with your Discord, Supabase, admin, and Vite API values. Never commit `.env`.
 
 Run the bot/API in one terminal:
 
@@ -58,18 +59,16 @@ npm run dev:web
 
 Open `http://localhost:5173`. The API runs on `http://localhost:3001`.
 
-Required environment values:
+The safe `.env.example` file contains placeholders for:
 
 ```txt
-DISCORD_TOKEN=...
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
-ADMIN_PASSWORD=...
-JWT_SECRET=...
-PORT=3001
-CORS_ORIGIN=http://localhost:5173
-DEFAULT_TIMEZONE=Europe/Bucharest
+DISCORD_TOKEN=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+ADMIN_PASSWORD=
+JWT_SECRET=
 VITE_API_URL=http://localhost:3001/api
+CORS_ORIGIN=http://localhost:5173
 ```
 
 ## Using the Dashboard
