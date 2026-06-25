@@ -40,6 +40,25 @@ button { cursor: pointer; }
 
 .login-panel h1 { margin: 0; font-size: 28px; }
 .login-panel p { margin: 0; color: #a9b1ba; }
+.login-error {
+  border: 1px solid #87384a;
+  border-radius: 8px;
+  background: #24181d;
+  color: #ffd0d8;
+  padding: 10px 12px;
+}
+.remember-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c8d0d8;
+}
+.remember-device input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: #45d68a;
+}
 
 .app-shell { min-height: 100dvh; display: grid; grid-template-columns: 260px 1fr; }
 .sidebar {
@@ -126,6 +145,12 @@ input, textarea, select {
   color: #eef2f5;
   padding: 11px 12px;
   outline: none;
+}
+.remember-device input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: #45d68a;
 }
 textarea { min-height: 130px; resize: vertical; }
 input:focus, textarea:focus, select:focus { border-color: #45d68a; box-shadow: 0 0 0 3px rgb(69 214 138 / 16%); }

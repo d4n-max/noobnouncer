@@ -14,10 +14,11 @@ import {
 import { DateTime } from "luxon";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { AllowedUser, Announcement } from "@scheduler/shared";
-import { api, login } from "./api";
+import { api, clearStoredToken, getStoredToken, login, setStoredToken, validateSession } from "./api";
 import { TIMEZONE_OPTIONS } from "./timezones";
 
 const AUTO_DELETE_LABEL = "1 hour";
+const initialAuthToken = getStoredToken();
 
 type Guild = { id: string; name: string; icon_url: string | null };
 type Channel = { id: string; guild_id: string; name: string; can_send: boolean };
@@ -90,7 +91,8 @@ function createEmptyForm(overrides: Partial<typeof defaultForm> = {}) {
 }
 
 export function App() {
-  const [token, setToken] = useState(localStorage.getItem("scheduler_token"));
+  const [token, setToken] = useState(initialAuthToken);
+  const [isCheckingSession, setIsCheckingSession] = useState(Boolean(initialAuthToken));
   const [page, setPage] = useState<Page>("announcements");
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -104,6 +106,7 @@ export function App() {
   const [suggestions, setSuggestions] = useState<DiscordUser[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
+  const [loginError, setLoginError] = useState("");
   const [toast, setToast] = useState("");
   const [isRefreshingGuilds, setIsRefreshingGuilds] = useState(false);
 
@@ -111,6 +114,17 @@ export function App() {
     () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
     [channels]
   );
+
+  useEffect(() => {
+    function handleExpiredSession() {
+      clearStoredToken();
+      setToken(null);
+      setLoginError("Session expired. Please log in again.");
+    }
+
+    window.addEventListener("scheduler:auth-expired", handleExpiredSession);
+    return () => window.removeEventListener("scheduler:auth-expired", handleExpiredSession);
+  }, []);
 
   async function loadGuilds(preferredGuildId = selectedGuild) {
     const loadedGuilds = await api<Guild[]>("/guilds");
@@ -158,8 +172,40 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!token) return;
-    void loadBase().catch((err) => setError(err.message));
+    if (!token) {
+      setIsCheckingSession(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function bootstrapSession() {
+      setIsCheckingSession(true);
+      try {
+        await validateSession();
+        if (!cancelled) {
+          setLoginError("");
+          await loadBase();
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        if (!cancelled) {
+          setToken(null);
+          if (message === "Unauthorized" || message.includes("401")) {
+            clearStoredToken();
+            setLoginError("Session expired. Please log in again.");
+          } else {
+            setLoginError("Cannot connect to server. Check that the bot/API is running.");
+          }
+        }
+      } finally {
+        if (!cancelled) setIsCheckingSession(false);
+      }
+    }
+
+    void bootstrapSession();
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   useEffect(() => {
@@ -245,9 +291,16 @@ export function App() {
   async function onLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const password = new FormData(event.currentTarget).get("password") as string;
-    const { token: nextToken } = await login(password);
-    localStorage.setItem("scheduler_token", nextToken);
-    setToken(nextToken);
+    const rememberDevice = new FormData(event.currentTarget).get("rememberDevice") === "on";
+
+    try {
+      const { token: nextToken } = await login(password, rememberDevice);
+      setStoredToken(nextToken, rememberDevice);
+      setLoginError("");
+      setToken(nextToken);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Invalid password");
+    }
   }
 
   async function saveAnnouncement(event: FormEvent) {
@@ -355,15 +408,28 @@ export function App() {
     setAllowedUsers((users) => users.filter((user) => user.id !== id));
   }
 
-  if (!token) {
+  function logout() {
+    clearStoredToken();
+    setToken(null);
+    setLoginError("");
+  }
+
+  if (!token || isCheckingSession) {
     return (
       <main className="login-screen">
         <form className="login-panel" onSubmit={onLogin}>
           <div className="mark">DS</div>
           <h1>Discord Scheduler</h1>
           <p>Admin access for announcement scheduling.</p>
+          {loginError && <div className="login-error">{loginError}</div>}
           <input name="password" type="password" placeholder="Admin password" required />
-          <button type="submit">Log in</button>
+          <label className="remember-device">
+            <input name="rememberDevice" type="checkbox" defaultChecked />
+            <span>Remember this device</span>
+          </label>
+          <button type="submit" disabled={isCheckingSession}>
+            {isCheckingSession ? "Checking session" : "Log in"}
+          </button>
         </form>
       </main>
     );
@@ -378,7 +444,7 @@ export function App() {
           <button className={page === "users" ? "active" : ""} onClick={() => setPage("users")}><Users /> Allowed Users</button>
           <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}><GearSix /> Settings</button>
         </nav>
-        <button className="logout" onClick={() => { localStorage.removeItem("scheduler_token"); setToken(null); }}>Log out</button>
+        <button className="logout" onClick={logout}>Log out</button>
       </aside>
 
       <main className="workspace">

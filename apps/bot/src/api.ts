@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Announcement, repeatTypes } from "@scheduler/shared";
-import { issueAdminToken, requireAdmin } from "./auth.js";
+import { issueAdminToken, NORMAL_SESSION_DAYS, requireAdmin, TRUSTED_DEVICE_SESSION_DAYS } from "./auth.js";
 import { client, getGuildRoles, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
@@ -38,7 +38,16 @@ export function createApi() {
       res.status(401).json({ error: "Invalid password" });
       return;
     }
-    res.json({ token: issueAdminToken() });
+
+    const rememberDevice = Boolean(req.body?.rememberDevice);
+    res.json({
+      token: issueAdminToken(rememberDevice),
+      expiresInDays: rememberDevice ? TRUSTED_DEVICE_SESSION_DAYS : NORMAL_SESSION_DAYS
+    });
+  });
+
+  app.get("/api/auth/me", requireAdmin, (_req, res) => {
+    res.json({ ok: true });
   });
 
   app.use("/api", requireAdmin);
