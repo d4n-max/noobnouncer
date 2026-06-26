@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { Announcement, repeatTypes } from "@scheduler/shared";
 import { issueAdminToken, NORMAL_SESSION_DAYS, requireAdmin, TRUSTED_DEVICE_SESSION_DAYS } from "./auth.js";
+import { normalizeAnnouncementStatus } from "./announcementRules.js";
 import { client, getGuildRoles, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
@@ -22,10 +23,70 @@ const announcementSchema = z.object({
   created_by: z.string().optional().nullable()
 });
 
+type AnnouncementRow = z.infer<typeof announcementSchema> & {
+  id: string;
+  status: "scheduled" | "sent" | "disabled";
+  repeat_type: "none" | "daily" | "weekly" | "monthly";
+};
+
+async function cleanupBadAnnouncementStatuses() {
+  const now = new Date().toISOString();
+
+  const futureSent = await supabase
+    .from("announcements")
+    .update({ status: "scheduled", updated_at: now })
+    .eq("status", "sent")
+    .gt("scheduled_at", now);
+
+  if (futureSent.error) throw futureSent.error;
+
+  const recurringSent = await supabase
+    .from("announcements")
+    .update({ status: "scheduled", updated_at: now })
+    .eq("status", "sent")
+    .neq("repeat_type", "none");
+
+  if (recurringSent.error) throw recurringSent.error;
+}
+
+function sortAnnouncementsForDashboard<T extends {
+  status: string;
+  scheduled_at: string;
+  last_sent_at?: string | null;
+}>(items: T[], now = new Date()) {
+  const nowMs = now.getTime();
+
+  function group(item: T) {
+    const scheduledAtMs = Date.parse(item.scheduled_at);
+    if (item.status === "scheduled" && scheduledAtMs >= nowMs) return 0;
+    if (item.status === "scheduled") return 1;
+    if (item.status === "disabled") return 2;
+    return 3;
+  }
+
+  return [...items].sort((left, right) => {
+    const leftGroup = group(left);
+    const rightGroup = group(right);
+    if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+
+    if (leftGroup === 3) {
+      const leftTime = Date.parse(left.last_sent_at || left.scheduled_at);
+      const rightTime = Date.parse(right.last_sent_at || right.scheduled_at);
+      return rightTime - leftTime;
+    }
+
+    return Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at);
+  });
+}
+
 export function createApi() {
   const app = express();
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const webDist = path.resolve(__dirname, "../../web/dist");
+
+  void cleanupBadAnnouncementStatuses().catch((error) => {
+    console.error("Announcement status cleanup failed", error);
+  });
 
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: "1mb" }));
@@ -130,26 +191,61 @@ export function createApi() {
   });
 
   app.get("/api/announcements", async (_req, res) => {
+    try {
+      await cleanupBadAnnouncementStatuses();
+    } catch (error) {
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : "Could not normalize announcement statuses"
+      });
+    }
+
     const { data, error } = await supabase
       .from("announcements")
-      .select("*")
-      .order("scheduled_at", { ascending: true });
+      .select("*");
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    res.json(sortAnnouncementsForDashboard(data ?? []));
   });
 
   app.post("/api/announcements", async (req, res) => {
     const payload = announcementSchema.parse(req.body);
-    const { data, error } = await supabase.from("announcements").insert(payload).select().single();
+    const normalizedPayload = {
+      ...payload,
+      status: normalizeAnnouncementStatus(payload)
+    };
+    const { data, error } = await supabase.from("announcements").insert(normalizedPayload).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.status(201).json(data);
   });
 
   app.put("/api/announcements/:id", async (req, res) => {
     const payload = announcementSchema.partial().parse(req.body);
+    const { data: existing, error: existingError } = await supabase
+      .from("announcements")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (existingError) return res.status(500).json({ error: existingError.message });
+
+    const nextValues = {
+      ...(existing as AnnouncementRow),
+      ...payload
+    };
+    const normalizedPayload = {
+      ...payload,
+      status: normalizeAnnouncementStatus({
+        scheduled_at: nextValues.scheduled_at,
+        repeat_type: nextValues.repeat_type,
+        status:
+          payload.status === undefined && existing.status === "disabled"
+            ? "disabled"
+            : nextValues.status
+      })
+    };
+
     const { data, error } = await supabase
       .from("announcements")
-      .update({ ...payload, updated_at: new Date().toISOString() })
+      .update({ ...normalizedPayload, updated_at: new Date().toISOString() })
       .eq("id", req.params.id)
       .select()
       .single();

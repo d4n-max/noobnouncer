@@ -1,6 +1,6 @@
-import { DateTime } from "luxon";
 import { PermissionFlagsBits } from "discord.js";
 import { ANNOUNCEMENT_DELETE_AFTER_MINUTES } from "@scheduler/shared";
+import { nextRecurringScheduledAt } from "./announcementRules.js";
 import { client } from "./discord.js";
 import { supabase } from "./supabase.js";
 
@@ -20,15 +20,6 @@ type PendingDeleteLog = {
   channel_id: string;
   discord_message_id: string;
 };
-
-function nextScheduledAt(item: DueAnnouncement) {
-  const zone = item.timezone || "Europe/Bucharest";
-  const current = DateTime.fromISO(item.scheduled_at, { zone });
-  if (item.repeat_type === "daily") return current.plus({ days: 1 }).toUTC().toISO();
-  if (item.repeat_type === "weekly") return current.plus({ weeks: 1 }).toUTC().toISO();
-  if (item.repeat_type === "monthly") return current.plus({ months: 1 }).toUTC().toISO();
-  return null;
-}
 
 async function logDelivery(
   item: DueAnnouncement,
@@ -197,7 +188,11 @@ export async function runSchedulerOnce() {
       const sentAt = new Date();
       await logDelivery(item, "sent", undefined, discordMessageId, sentAt);
 
-      const next = nextScheduledAt(item);
+      const next = nextRecurringScheduledAt(
+        item.scheduled_at,
+        item.timezone,
+        item.repeat_type
+      );
       await supabase
         .from("announcements")
         .update({

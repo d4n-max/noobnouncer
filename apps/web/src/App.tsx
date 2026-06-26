@@ -386,11 +386,11 @@ export function App() {
   }
 
   async function setStatus(item: Announcement, status: "scheduled" | "disabled") {
-    const updated = await api<Announcement>(`/announcements/${item.id}`, {
+    await api<Announcement>(`/announcements/${item.id}`, {
       method: "PUT",
       body: JSON.stringify({ status })
     });
-    setAnnouncements((items) => items.map((row) => (row.id === item.id ? updated : row)));
+    setAnnouncements(await api<Announcement[]>("/announcements"));
   }
 
   async function addAllowedUser(user: DiscordUser) {

@@ -86,6 +86,18 @@ create index if not exists announcements_due_idx
   on public.announcements (status, scheduled_at)
   where status = 'scheduled';
 
+update public.announcements
+set status = 'scheduled',
+    updated_at = now()
+where status = 'sent'
+  and scheduled_at > now();
+
+update public.announcements
+set status = 'scheduled',
+    updated_at = now()
+where status = 'sent'
+  and repeat_type <> 'none';
+
 create index if not exists announcements_guild_idx on public.announcements (guild_id);
 create index if not exists allowed_users_guild_idx on public.allowed_users (guild_id);
 create index if not exists delivery_logs_announcement_idx on public.delivery_logs (announcement_id);
