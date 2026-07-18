@@ -4,10 +4,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { PermissionFlagsBits } from "discord.js";
 import { Announcement, isAnnouncementMediaUrl, repeatTypes } from "@scheduler/shared";
 import { issueAdminToken, NORMAL_SESSION_DAYS, requireAdmin, TRUSTED_DEVICE_SESSION_DAYS } from "./auth.js";
 import { normalizeAnnouncementSchedule } from "./announcementRules.js";
-import { client, getGuildRoles, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
+import { client, getGuildRoles, searchGuildMembers, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -190,7 +191,12 @@ export function createApi() {
       return;
     }
 
-    const permissions = String(1024 + 2048 + 65536);
+    const permissions = String(
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.MentionEveryone
+    );
     const url = new URL("https://discord.com/oauth2/authorize");
     url.searchParams.set("client_id", env.DISCORD_CLIENT_ID);
     url.searchParams.set("scope", "bot");
@@ -210,6 +216,21 @@ export function createApi() {
       res.status(500).json({
         error: error instanceof Error ? error.message : "Could not load roles"
       });
+    }
+  });
+
+  app.get("/api/guilds/:guildId/members/search", async (req, res) => {
+    const query = String(req.query.q ?? "").trim();
+    if (!query) {
+      res.json([]);
+      return;
+    }
+
+    try {
+      res.json(await searchGuildMembers(req.params.guildId, query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not search server members.";
+      res.status(message.includes("invited") ? 404 : 500).json({ error: message });
     }
   });
 

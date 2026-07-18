@@ -1,5 +1,5 @@
 import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
-import { ANNOUNCEMENT_DELETE_AFTER_MINUTES } from "@scheduler/shared";
+import { ANNOUNCEMENT_DELETE_AFTER_MINUTES, extractDiscordMentions } from "@scheduler/shared";
 import { nextRecurringScheduledAt } from "./announcementRules.js";
 import { client } from "./discord.js";
 import { supabase } from "./supabase.js";
@@ -68,14 +68,22 @@ async function sendAnnouncement(item: DueAnnouncement) {
     throw new Error("Channel is not text based or could not be fetched");
   }
 
-  const roleIds = Array.from(item.message.matchAll(/<@&(\d{17,20})>/g), (match) => match[1]);
+  const mentions = extractDiscordMentions(item.message);
+  if (
+    mentions.everyone &&
+    "permissionsFor" in channel &&
+    channel.guild?.members.me &&
+    !channel.permissionsFor(channel.guild.members.me)?.has(PermissionFlagsBits.MentionEveryone)
+  ) {
+    throw new Error("Noobnouncer cannot use @everyone or @here in this channel. Grant the bot the Mention Everyone permission.");
+  }
   const message = await channel.send({
     content: item.message,
     embeds: item.gif_url ? [new EmbedBuilder().setImage(item.gif_url)] : [],
     allowedMentions: {
-      parse: [],
-      roles: [...new Set(roleIds)],
-      users: [],
+      parse: mentions.everyone ? ["everyone"] : [],
+      roles: mentions.roles,
+      users: mentions.users,
       repliedUser: false
     }
   });

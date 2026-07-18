@@ -23,10 +23,11 @@ supabase          Database schema
    - View Channels
    - Send Messages
    - Read Message History
+   - Mention Everyone, @here, and All Roles (needed only for @everyone/@here announcements)
 6. Use the dashboard's Invite bot button, or use this invite URL shape:
 
 ```txt
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=68608&scope=bot
+https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=199680&scope=bot
 ```
 
 ## Supabase Setup
@@ -85,6 +86,8 @@ CORS_ORIGIN=http://localhost:5173
 The default timezone is `Europe/Bucharest`. Times are saved as UTC in Supabase.
 
 Servers are not added manually. Invite the bot to another Discord server with the Invite bot button, then click Refresh servers in the dashboard. The new server appears after Discord adds the bot and the backend syncs the live guild list. If a server has no channels in the dashboard, check that the bot can view and send messages in at least one text channel.
+
+The announcement mention picker supports server members, roles, `@everyone`, and `@here`. Existing servers must grant the bot the Mention Everyone permission in the bot role or target-channel override before mass mentions can send. No Administrator permission is required.
 
 ## Allowed Users
 

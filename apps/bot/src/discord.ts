@@ -27,6 +27,11 @@ export function canBotSend(channel: TextBasedChannel): boolean {
   );
 }
 
+export function canBotMentionEveryone(channel: TextBasedChannel): boolean {
+  if (!("permissionsFor" in channel) || !channel.guild?.members.me) return false;
+  return Boolean(channel.permissionsFor(channel.guild.members.me)?.has(PermissionFlagsBits.MentionEveryone));
+}
+
 export async function upsertGuild(guild: Guild) {
   const { error } = await supabase.from("guilds").upsert({
     id: guild.id,
@@ -46,12 +51,15 @@ export async function syncGuildChannels(guild: Guild) {
       guild_id: guild.id,
       name: channel!.name,
       type: "text",
-        can_send: canBotSend(channel as TextBasedChannel),
-        updated_at: new Date().toISOString()
-      }));
+      can_send: canBotSend(channel as TextBasedChannel),
+      can_mention_everyone: canBotMentionEveryone(channel as TextBasedChannel),
+      updated_at: new Date().toISOString()
+    }));
 
   if (rows.length) {
-    const { error } = await supabase.from("channels").upsert(rows);
+    const { error } = await supabase.from("channels").upsert(
+      rows.map(({ can_mention_everyone, ...row }) => row)
+    );
     if (error) throw error;
   }
 
@@ -94,4 +102,29 @@ export async function getGuildRoles(guildId: string) {
       color: role.hexColor === "#000000" ? null : role.hexColor,
       mentionable: role.mentionable
     }));
+}
+
+export async function searchGuildMembers(guildId: string, query: string) {
+  if (!client.guilds.cache.has(guildId)) {
+    throw new Error("Bot needs to be invited to this server first.");
+  }
+
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const members = await guild.members.search({ query, limit: 20 });
+    return members.map((member) => ({
+      id: member.id,
+      username: member.user.username,
+      display_name: member.displayName,
+      nickname: member.nickname,
+      avatar_url: member.displayAvatarURL(),
+      bot: member.user.bot
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not search server members.";
+    if (message.toLowerCase().includes("disallowed intents")) {
+      throw new Error("Member search needs the Server Members Intent enabled for this bot.");
+    }
+    throw new Error(message);
+  }
 }

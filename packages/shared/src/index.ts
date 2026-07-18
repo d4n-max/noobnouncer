@@ -11,6 +11,19 @@ export function isAnnouncementMediaUrl(value: string) {
   }
 }
 
+export function extractDiscordMentions(content: string) {
+  const users = Array.from(content.matchAll(/<@!?(\d{17,20})>/g), (match) => match[1]);
+  const roles = Array.from(content.matchAll(/<@&(\d{17,20})>/g), (match) => match[1]);
+  const special = Array.from(content.matchAll(/(?:^|\s)@(everyone|here)\b/g), (match) => `@${match[1]}`);
+
+  return {
+    users: [...new Set(users)],
+    roles: [...new Set(roles)],
+    special: [...new Set(special)],
+    everyone: special.length > 0
+  };
+}
+
 export type RepeatType = (typeof repeatTypes)[number];
 export type AnnouncementStatus = (typeof announcementStatuses)[number];
 

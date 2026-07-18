@@ -12,10 +12,11 @@ import {
   X
 } from "@phosphor-icons/react";
 import { DateTime } from "luxon";
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { isAnnouncementMediaUrl, type AllowedUser, type Announcement } from "@scheduler/shared";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { extractDiscordMentions, isAnnouncementMediaUrl, type AllowedUser, type Announcement } from "@scheduler/shared";
 import { api, clearStoredToken, getStoredToken, login, setStoredToken, validateSession } from "./api";
 import { GiphyPickerModal } from "./GiphyPickerModal";
+import { MentionPickerModal, type MentionSelection } from "./MentionPickerModal";
 import { TIMEZONE_OPTIONS } from "./timezones";
 
 const AUTO_DELETE_LABEL = "1 hour";
@@ -23,8 +24,9 @@ const initialAuthToken = getStoredToken();
 const GIPHY_API_KEY = import.meta.env.VITE_GIPHY_API_KEY?.trim() ?? "";
 
 type Guild = { id: string; name: string; icon_url: string | null };
-type Channel = { id: string; guild_id: string; name: string; can_send: boolean };
+type Channel = { id: string; guild_id: string; name: string; can_send: boolean; can_mention_everyone?: boolean };
 type Role = { id: string; name: string; color: string | null; mentionable: boolean };
+type MentionMember = { id: string; username: string; display_name: string; nickname: string | null; avatar_url: string; bot: boolean };
 type AnnouncementSaveResponse = Announcement & { movedToNextOccurrence?: boolean };
 type DiscordUser = {
   discord_user_id: string;
@@ -116,6 +118,9 @@ export function App() {
   const [toast, setToast] = useState("");
   const [isRefreshingGuilds, setIsRefreshingGuilds] = useState(false);
   const [isGiphyPickerOpen, setIsGiphyPickerOpen] = useState(false);
+  const [isMentionPickerOpen, setIsMentionPickerOpen] = useState(false);
+  const [mentionMembers, setMentionMembers] = useState<Record<string, MentionMember>>({});
+  const messageRef = useRef<HTMLTextAreaElement>(null);
 
   const channelById = useMemo(
     () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
@@ -375,19 +380,49 @@ export function App() {
     setForm((current) => ({ ...current, time: nextTime }));
   }
 
-  function insertRoleMention(roleId: string) {
-    const role = roles.find((item) => item.id === roleId);
-    if (!role) return;
+  function addMention(selection: MentionSelection) {
+    const textarea = messageRef.current;
+    const start = textarea?.selectionStart ?? form.message.length;
+    const end = textarea?.selectionEnd ?? form.message.length;
+    if (form.message.includes(selection.syntax)) return;
 
-    const mention = `<@&${role.id}>`;
-    setForm((current) => ({
-      ...current,
-      message: current.message ? `${current.message} ${mention}` : mention
-    }));
-
-    if (!role.mentionable) {
+    const nextMessage = `${form.message.slice(0, start)}${selection.syntax}${form.message.slice(end)}`;
+    setForm((current) => ({ ...current, message: nextMessage }));
+    if (selection.member) {
+      setMentionMembers((current) => ({ ...current, [selection.member!.id]: selection.member! }));
+    }
+    if (selection.roleMayNotPing) {
       setToast("This role may not ping unless it is mentionable or the bot has permission to mention roles.");
     }
+    if (selection.kind === "special") {
+      const channel = channels.find((item) => item.id === form.channel_id);
+      if (channel && !channel.can_mention_everyone) {
+        setToast("Noobnouncer cannot use @everyone or @here in this channel. Grant the bot the Mention Everyone permission.");
+      }
+    }
+    window.setTimeout(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start + selection.syntax.length, start + selection.syntax.length);
+    }, 0);
+  }
+
+  const mentionChips = useMemo(() => {
+    const mentions = extractDiscordMentions(form.message);
+    const userSyntaxById = new Map(
+      Array.from(form.message.matchAll(/<@!?(\d{17,20})>/g), (match) => [match[1], match[0]])
+    );
+    return [
+      ...mentions.users.map((id) => ({ syntax: userSyntaxById.get(id) || `<@${id}>`, label: `@${mentionMembers[id]?.display_name || "member"}` })),
+      ...mentions.roles.map((id) => ({ syntax: `<@&${id}>`, label: `@${roles.find((role) => role.id === id)?.name || "role"}` })),
+      ...mentions.special.map((syntax) => ({ syntax, label: syntax }))
+    ];
+  }, [form.message, mentionMembers, roles]);
+
+  function removeMention(syntax: string) {
+    setForm((current) => ({
+      ...current,
+      message: current.message.split(syntax).join("").replace(/\s{2,}/g, " ").trim()
+    }));
   }
 
   function editAnnouncement(item: Announcement) {
@@ -534,18 +569,9 @@ export function App() {
                     <option value="monthly">Monthly</option>
                   </select>
                 </div>
-                <div className="message-tools">
-                  <select defaultValue="" onChange={(e) => { insertRoleMention(e.target.value); e.target.value = ""; }}>
-                    <option value="" disabled>Mention role</option>
-                    {roles.map((role) => (
-                      <option key={role.id} value={role.id}>
-                        {role.name}{role.mentionable ? "" : " (may not ping)"}
-                      </option>
-                    ))}
-                  </select>
-                  {!roles.length && <span>No roles available for this server.</span>}
-                </div>
-                <textarea placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required />
+                <div className="message-tools"><button type="button" onClick={() => setIsMentionPickerOpen(true)}>Add mention</button></div>
+                <textarea ref={messageRef} placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required />
+                {mentionChips.length > 0 && <div className="mention-chips">{mentionChips.map((chip) => <button key={chip.syntax} type="button" onClick={() => removeMention(chip.syntax)} title={`Remove ${chip.label}`}>{chip.label} <X /></button>)}</div>}
                 <div className="gif-picker-controls">
                   <button
                     type="button"
@@ -680,6 +706,18 @@ export function App() {
               giphy_title: gif.title
             }));
             setIsGiphyPickerOpen(false);
+          }}
+        />
+      )}
+      {isMentionPickerOpen && form.guild_id && (
+        <MentionPickerModal
+          guildId={form.guild_id}
+          roles={roles}
+          selectedMessage={form.message}
+          onClose={() => setIsMentionPickerOpen(false)}
+          onSelect={(selection) => {
+            addMention(selection);
+            setIsMentionPickerOpen(false);
           }}
         />
       )}
