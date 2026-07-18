@@ -9,3 +9,4 @@ apps/web/.env.*
 
 node_modules
 dist
+supabase/.temp/

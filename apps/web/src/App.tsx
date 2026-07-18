@@ -120,6 +120,7 @@ export function App() {
   const [isGiphyPickerOpen, setIsGiphyPickerOpen] = useState(false);
   const [isMentionPickerOpen, setIsMentionPickerOpen] = useState(false);
   const [mentionMembers, setMentionMembers] = useState<Record<string, MentionMember>>({});
+  const [isSavingAnnouncement, setIsSavingAnnouncement] = useState(false);
   const messageRef = useRef<HTMLTextAreaElement>(null);
 
   const channelById = useMemo(
@@ -323,7 +324,10 @@ export function App() {
     }
 
     const scheduledAt = DateTime.fromISO(`${form.date}T${form.time}`, { zone: form.timezone }).toUTC().toISO();
-    if (!scheduledAt) return;
+    if (!scheduledAt) {
+      setError("Please select a valid date and time.");
+      return;
+    }
     if (form.gif_url && !isAnnouncementMediaUrl(form.gif_url)) {
       setError("Please enter a valid GIF or image URL.");
       return;
@@ -342,30 +346,46 @@ export function App() {
       repeat_type: form.repeat_type,
       status: form.status
     };
-    let saved: AnnouncementSaveResponse;
-    if (editingId) {
-      saved = await api<AnnouncementSaveResponse>(`/announcements/${editingId}`, {
-        method: "PUT",
-        body: JSON.stringify(payload)
-      });
-    } else {
-      saved = await api<AnnouncementSaveResponse>("/announcements", {
-        method: "POST",
-        body: JSON.stringify(payload)
-      });
+    const isEditing = Boolean(editingId);
+    setIsSavingAnnouncement(true);
+    setError("");
+    try {
+      const saved = isEditing
+        ? await api<AnnouncementSaveResponse>(`/announcements/${editingId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload)
+          })
+        : await api<AnnouncementSaveResponse>("/announcements", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+
+      localStorage.setItem(preferenceKeys.guildId, form.guild_id);
+      localStorage.setItem(preferenceKeys.date, form.date);
+      storeChannelForGuild(form.guild_id, form.channel_id);
+      setForm(createEmptyForm({ guild_id: form.guild_id, channel_id: form.channel_id, date: form.date }));
+      setEditingId(null);
+      setAnnouncements(await api<Announcement[]>("/announcements"));
+
+      if (saved.movedToNextOccurrence) {
+        const nextSend = DateTime.fromISO(saved.scheduled_at)
+          .setZone(saved.timezone)
+          .toFormat("DD T");
+        setToast(`This recurring reminder was moved to the next future occurrence: ${nextSend}.`);
+      } else {
+        setToast(isEditing ? "Changes saved." : "Announcement created.");
+      }
+    } catch (error) {
+      console.error("Announcement save failed", error);
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("announcements.gif_url") || message.includes("announcements.giphy_")) {
+        setError("Database schema is missing required GIF fields. Run the Supabase migration and try again.");
+      } else {
+        setError(message || (isEditing ? "Could not save changes." : "Could not create announcement."));
+      }
+    } finally {
+      setIsSavingAnnouncement(false);
     }
-    if (saved.movedToNextOccurrence) {
-      const nextSend = DateTime.fromISO(saved.scheduled_at)
-        .setZone(saved.timezone)
-        .toFormat("DD T");
-      setToast(`This recurring reminder was moved to the next future occurrence: ${nextSend}.`);
-    }
-    localStorage.setItem(preferenceKeys.guildId, form.guild_id);
-    localStorage.setItem(preferenceKeys.date, form.date);
-    storeChannelForGuild(form.guild_id, form.channel_id);
-    setForm(createEmptyForm({ guild_id: form.guild_id, channel_id: form.channel_id, date: form.date }));
-    setEditingId(null);
-    setAnnouncements(await api<Announcement[]>("/announcements"));
   }
 
   function setQuickTime(kind: "plus15" | "plus30" | "plus60" | "tonight") {
@@ -604,7 +624,7 @@ export function App() {
                   </div>
                 )}
                 <div className="form-actions">
-                  <button className="primary" type="submit" disabled={!channels.length}><Plus /> {editingId ? "Save changes" : "Create announcement"}</button>
+                  <button className="primary" type="submit" disabled={!channels.length || isSavingAnnouncement}><Plus /> {isSavingAnnouncement ? (editingId ? "Saving..." : "Creating...") : editingId ? "Save changes" : "Create announcement"}</button>
                   {editingId && <button type="button" onClick={() => { setEditingId(null); setForm(createEmptyForm({ guild_id: selectedGuild, channel_id: form.channel_id, date: form.date })); }}>Cancel</button>}
                 </div>
               </form>
