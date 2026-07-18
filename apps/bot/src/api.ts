@@ -4,9 +4,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { Announcement, repeatTypes } from "@scheduler/shared";
+import { Announcement, isAnnouncementMediaUrl, repeatTypes } from "@scheduler/shared";
 import { issueAdminToken, NORMAL_SESSION_DAYS, requireAdmin, TRUSTED_DEVICE_SESSION_DAYS } from "./auth.js";
-import { normalizeAnnouncementStatus } from "./announcementRules.js";
+import { normalizeAnnouncementSchedule } from "./announcementRules.js";
 import { client, getGuildRoles, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
@@ -16,6 +16,18 @@ const announcementSchema = z.object({
   channel_id: z.string(),
   title: z.string().min(1).max(120),
   message: z.string().min(1).max(4000),
+  gif_url: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+    z
+      .string()
+      .trim()
+      .url("Please enter a valid GIF or image URL.")
+      .refine(isAnnouncementMediaUrl, "Please enter a valid GIF or image URL.")
+      .nullable()
+      .optional()
+  ),
+  giphy_id: z.string().trim().min(1).max(100).nullable().optional(),
+  giphy_title: z.string().trim().max(500).nullable().optional(),
   scheduled_at: z.string().datetime(),
   timezone: z.string().default(env.DEFAULT_TIMEZONE),
   repeat_type: z.enum(repeatTypes).default("none"),
@@ -47,6 +59,36 @@ async function cleanupBadAnnouncementStatuses() {
     .neq("repeat_type", "none");
 
   if (recurringSent.error) throw recurringSent.error;
+
+  const { data: overdueRecurring, error: overdueRecurringError } = await supabase
+    .from("announcements")
+    .select("id,scheduled_at,timezone,repeat_type,status")
+    .eq("status", "scheduled")
+    .neq("repeat_type", "none")
+    .lte("scheduled_at", now);
+
+  if (overdueRecurringError) throw overdueRecurringError;
+
+  for (const item of overdueRecurring ?? []) {
+    const normalized = normalizeAnnouncementSchedule({
+      scheduled_at: item.scheduled_at,
+      timezone: item.timezone,
+      repeat_type: item.repeat_type,
+      status: item.status
+    });
+    if (!normalized.movedToNextOccurrence) continue;
+
+    const { error } = await supabase
+      .from("announcements")
+      .update({
+        scheduled_at: normalized.scheduled_at,
+        status: normalized.status,
+        updated_at: now
+      })
+      .eq("id", item.id);
+
+    if (error) throw error;
+  }
 }
 
 function sortAnnouncementsForDashboard<T extends {
@@ -208,13 +250,15 @@ export function createApi() {
 
   app.post("/api/announcements", async (req, res) => {
     const payload = announcementSchema.parse(req.body);
+    const normalized = normalizeAnnouncementSchedule(payload);
     const normalizedPayload = {
       ...payload,
-      status: normalizeAnnouncementStatus(payload)
+      scheduled_at: normalized.scheduled_at,
+      status: normalized.status
     };
     const { data, error } = await supabase.from("announcements").insert(normalizedPayload).select().single();
     if (error) return res.status(500).json({ error: error.message });
-    res.status(201).json(data);
+    res.status(201).json({ ...data, movedToNextOccurrence: normalized.movedToNextOccurrence });
   });
 
   app.put("/api/announcements/:id", async (req, res) => {
@@ -231,16 +275,19 @@ export function createApi() {
       ...(existing as AnnouncementRow),
       ...payload
     };
+    const normalized = normalizeAnnouncementSchedule({
+      scheduled_at: nextValues.scheduled_at,
+      timezone: nextValues.timezone,
+      repeat_type: nextValues.repeat_type,
+      status:
+        payload.status === undefined && existing.status === "disabled"
+          ? "disabled"
+          : nextValues.status
+    });
     const normalizedPayload = {
       ...payload,
-      status: normalizeAnnouncementStatus({
-        scheduled_at: nextValues.scheduled_at,
-        repeat_type: nextValues.repeat_type,
-        status:
-          payload.status === undefined && existing.status === "disabled"
-            ? "disabled"
-            : nextValues.status
-      })
+      scheduled_at: normalized.scheduled_at,
+      status: normalized.status
     };
 
     const { data, error } = await supabase
@@ -250,7 +297,7 @@ export function createApi() {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    res.json({ ...data, movedToNextOccurrence: normalized.movedToNextOccurrence });
   });
 
   app.delete("/api/announcements/:id", async (req, res) => {

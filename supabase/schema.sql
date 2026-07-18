@@ -24,6 +24,9 @@ create table if not exists public.announcements (
   channel_id text not null references public.channels(id) on delete cascade,
   title text not null,
   message text not null,
+  gif_url text,
+  giphy_id text,
+  giphy_title text,
   scheduled_at timestamptz not null,
   timezone text not null default 'Europe/Bucharest',
   repeat_type text not null default 'none' check (repeat_type in ('none', 'daily', 'weekly', 'monthly')),
@@ -34,6 +37,10 @@ create table if not exists public.announcements (
   last_sent_at timestamptz,
   locked_until timestamptz
 );
+
+alter table public.announcements add column if not exists gif_url text;
+alter table public.announcements add column if not exists giphy_id text;
+alter table public.announcements add column if not exists giphy_title text;
 
 create table if not exists public.allowed_users (
   id uuid primary key default gen_random_uuid(),
@@ -97,6 +104,46 @@ set status = 'scheduled',
     updated_at = now()
 where status = 'sent'
   and repeat_type <> 'none';
+
+with recursive recurring_next as (
+  select
+    id,
+    scheduled_at,
+    timezone,
+    repeat_type
+  from public.announcements
+  where status = 'scheduled'
+    and repeat_type <> 'none'
+    and scheduled_at <= now()
+
+  union all
+
+  select
+    id,
+    case repeat_type
+      when 'daily' then scheduled_at + interval '1 day'
+      when 'weekly' then scheduled_at + interval '1 week'
+      when 'monthly' then scheduled_at + interval '1 month'
+      else scheduled_at
+    end,
+    timezone,
+    repeat_type
+  from recurring_next
+  where scheduled_at <= now()
+),
+recurring_latest as (
+  select distinct on (id)
+    id,
+    scheduled_at
+  from recurring_next
+  where scheduled_at > now()
+  order by id, scheduled_at asc
+)
+update public.announcements announcements
+set scheduled_at = recurring_latest.scheduled_at,
+    updated_at = now()
+from recurring_latest
+where announcements.id = recurring_latest.id;
 
 create index if not exists announcements_guild_idx on public.announcements (guild_id);
 create index if not exists allowed_users_guild_idx on public.allowed_users (guild_id);

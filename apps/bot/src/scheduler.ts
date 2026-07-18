@@ -1,4 +1,4 @@
-import { PermissionFlagsBits } from "discord.js";
+import { EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { ANNOUNCEMENT_DELETE_AFTER_MINUTES } from "@scheduler/shared";
 import { nextRecurringScheduledAt } from "./announcementRules.js";
 import { client } from "./discord.js";
@@ -10,6 +10,7 @@ type DueAnnouncement = {
   channel_id: string;
   title: string;
   message: string;
+  gif_url: string | null;
   scheduled_at: string;
   timezone: string;
   repeat_type: "none" | "daily" | "weekly" | "monthly";
@@ -70,6 +71,7 @@ async function sendAnnouncement(item: DueAnnouncement) {
   const roleIds = Array.from(item.message.matchAll(/<@&(\d{17,20})>/g), (match) => match[1]);
   const message = await channel.send({
     content: item.message,
+    embeds: item.gif_url ? [new EmbedBuilder().setImage(item.gif_url)] : [],
     allowedMentions: {
       parse: [],
       roles: [...new Set(roleIds)],
@@ -168,7 +170,7 @@ export async function runSchedulerOnce() {
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from("announcements")
-    .select("id,guild_id,channel_id,title,message,scheduled_at,timezone,repeat_type")
+    .select("id,guild_id,channel_id,title,message,gif_url,scheduled_at,timezone,repeat_type")
     .eq("status", "scheduled")
     .lte("scheduled_at", now)
     .or(`locked_until.is.null,locked_until.lt.${now}`)

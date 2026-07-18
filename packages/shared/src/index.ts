@@ -2,6 +2,15 @@ export const repeatTypes = ["none", "daily", "weekly", "monthly"] as const;
 export const announcementStatuses = ["scheduled", "sent", "disabled"] as const;
 export const ANNOUNCEMENT_DELETE_AFTER_MINUTES = 60;
 
+export function isAnnouncementMediaUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export type RepeatType = (typeof repeatTypes)[number];
 export type AnnouncementStatus = (typeof announcementStatuses)[number];
 
@@ -29,6 +38,9 @@ export interface Announcement {
   channel_id: string;
   title: string;
   message: string;
+  gif_url: string | null;
+  giphy_id: string | null;
+  giphy_title: string | null;
   scheduled_at: string;
   timezone: string;
   repeat_type: RepeatType;

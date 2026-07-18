@@ -13,16 +13,19 @@ import {
 } from "@phosphor-icons/react";
 import { DateTime } from "luxon";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { AllowedUser, Announcement } from "@scheduler/shared";
+import { isAnnouncementMediaUrl, type AllowedUser, type Announcement } from "@scheduler/shared";
 import { api, clearStoredToken, getStoredToken, login, setStoredToken, validateSession } from "./api";
+import { GiphyPickerModal } from "./GiphyPickerModal";
 import { TIMEZONE_OPTIONS } from "./timezones";
 
 const AUTO_DELETE_LABEL = "1 hour";
 const initialAuthToken = getStoredToken();
+const GIPHY_API_KEY = import.meta.env.VITE_GIPHY_API_KEY?.trim() ?? "";
 
 type Guild = { id: string; name: string; icon_url: string | null };
 type Channel = { id: string; guild_id: string; name: string; can_send: boolean };
 type Role = { id: string; name: string; color: string | null; mentionable: boolean };
+type AnnouncementSaveResponse = Announcement & { movedToNextOccurrence?: boolean };
 type DiscordUser = {
   discord_user_id: string;
   username: string;
@@ -70,6 +73,9 @@ const defaultForm = {
   guild_id: "",
   channel_id: "",
   message: "",
+  gif_url: "",
+  giphy_id: "",
+  giphy_title: "",
   date: getStoredDate(),
   time: "",
   timezone: "UTC",
@@ -109,6 +115,7 @@ export function App() {
   const [loginError, setLoginError] = useState("");
   const [toast, setToast] = useState("");
   const [isRefreshingGuilds, setIsRefreshingGuilds] = useState(false);
+  const [isGiphyPickerOpen, setIsGiphyPickerOpen] = useState(false);
 
   const channelById = useMemo(
     () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
@@ -312,21 +319,41 @@ export function App() {
 
     const scheduledAt = DateTime.fromISO(`${form.date}T${form.time}`, { zone: form.timezone }).toUTC().toISO();
     if (!scheduledAt) return;
+    if (form.gif_url && !isAnnouncementMediaUrl(form.gif_url)) {
+      setError("Please enter a valid GIF or image URL.");
+      return;
+    }
 
     const payload = {
       guild_id: form.guild_id,
       channel_id: form.channel_id,
       title: form.title,
       message: form.message,
+      gif_url: form.gif_url || null,
+      giphy_id: form.giphy_id || null,
+      giphy_title: form.giphy_title || null,
       scheduled_at: scheduledAt,
       timezone: form.timezone,
       repeat_type: form.repeat_type,
       status: form.status
     };
+    let saved: AnnouncementSaveResponse;
     if (editingId) {
-      await api(`/announcements/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+      saved = await api<AnnouncementSaveResponse>(`/announcements/${editingId}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
     } else {
-      await api("/announcements", { method: "POST", body: JSON.stringify(payload) });
+      saved = await api<AnnouncementSaveResponse>("/announcements", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    }
+    if (saved.movedToNextOccurrence) {
+      const nextSend = DateTime.fromISO(saved.scheduled_at)
+        .setZone(saved.timezone)
+        .toFormat("DD T");
+      setToast(`This recurring reminder was moved to the next future occurrence: ${nextSend}.`);
     }
     localStorage.setItem(preferenceKeys.guildId, form.guild_id);
     localStorage.setItem(preferenceKeys.date, form.date);
@@ -372,6 +399,9 @@ export function App() {
       guild_id: item.guild_id,
       channel_id: item.channel_id,
       message: item.message,
+      gif_url: item.gif_url || "",
+      giphy_id: item.giphy_id || "",
+      giphy_title: item.giphy_title || "",
       date: local.toISODate() ?? "",
       time: local.toFormat("HH:mm"),
       timezone: item.timezone,
@@ -516,6 +546,32 @@ export function App() {
                   {!roles.length && <span>No roles available for this server.</span>}
                 </div>
                 <textarea placeholder="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required />
+                <div className="gif-picker-controls">
+                  <button
+                    type="button"
+                    className="gif-button"
+                    onClick={() => setIsGiphyPickerOpen(true)}
+                    disabled={!GIPHY_API_KEY}
+                  >
+                    {form.gif_url ? "Change GIF" : "GIF"}
+                  </button>
+                  {form.gif_url && (
+                    <button
+                      type="button"
+                      className="remove-gif-button"
+                      onClick={() => setForm((current) => ({ ...current, gif_url: "", giphy_id: "", giphy_title: "" }))}
+                    >
+                      Remove GIF
+                    </button>
+                  )}
+                  {!GIPHY_API_KEY && <span>GIPHY is not configured.</span>}
+                </div>
+                {form.gif_url && (
+                  <div className="selected-gif-preview">
+                    <img src={form.gif_url} alt={form.giphy_title || "Selected GIF"} />
+                    <span>{form.giphy_title || "Selected GIF"}</span>
+                  </div>
+                )}
                 {form.guild_id && !channels.length && (
                   <div className="helper-message">
                     No available text channels found. The bot may need View Channels and Send Messages permissions in this server.
@@ -540,6 +596,7 @@ export function App() {
                         <span>#{channelById[item.channel_id]?.name ?? item.channel_id}</span>
                         <span>{DateTime.fromISO(item.scheduled_at).setZone(item.timezone).toFormat("DD T")}</span>
                         <span>{item.repeat_type}</span>
+                        {item.gif_url && <span>GIF</span>}
                         <span>Auto-delete: {AUTO_DELETE_LABEL}</span>
                         <span className={`status ${item.status}`}>{item.status}</span>
                       </div>
@@ -611,6 +668,21 @@ export function App() {
           </section>
         )}
       </main>
+      {isGiphyPickerOpen && GIPHY_API_KEY && (
+        <GiphyPickerModal
+          apiKey={GIPHY_API_KEY}
+          onClose={() => setIsGiphyPickerOpen(false)}
+          onSelect={(gif) => {
+            setForm((current) => ({
+              ...current,
+              gif_url: gif.url,
+              giphy_id: gif.id,
+              giphy_title: gif.title
+            }));
+            setIsGiphyPickerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

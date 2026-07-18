@@ -9,6 +9,10 @@ type StatusInput = {
   status?: AnnouncementStatus | null;
 };
 
+type ScheduleInput = StatusInput & {
+  timezone: string;
+};
+
 export function normalizeAnnouncementStatus(
   input: StatusInput,
   now = new Date()
@@ -38,4 +42,31 @@ export function nextRecurringScheduledAt(
   } while (next <= reference);
 
   return next.toUTC().toISO();
+}
+
+export function normalizeAnnouncementSchedule(input: ScheduleInput, now = new Date()) {
+  const status = normalizeAnnouncementStatus(input, now);
+  const shouldAdvanceRecurring =
+    status !== "disabled" &&
+    input.repeat_type !== "none" &&
+    Date.parse(input.scheduled_at) <= now.getTime();
+
+  if (!shouldAdvanceRecurring) {
+    return {
+      scheduled_at: input.scheduled_at,
+      status,
+      movedToNextOccurrence: false
+    };
+  }
+
+  return {
+    scheduled_at: nextRecurringScheduledAt(
+      input.scheduled_at,
+      input.timezone,
+      input.repeat_type,
+      now
+    ) ?? input.scheduled_at,
+    status: "scheduled" as const,
+    movedToNextOccurrence: true
+  };
 }
