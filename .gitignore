@@ -9,4 +9,9 @@ apps/web/.env.*
 
 node_modules
 dist
+coverage
+.cache
+.vite
+*.tsbuildinfo
+*.log
 supabase/.temp/

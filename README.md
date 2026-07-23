@@ -1,141 +1,131 @@
-# Discord Announcement Scheduler
+# Noobnouncer — Discord Announcement Scheduler
 
-A small TypeScript monorepo for scheduling Discord announcements from a dark web dashboard. The bot posts messages automatically, supports one-time and recurring schedules, and gates prefix commands through Supabase-backed allowed users.
+A self-hosted dashboard and Discord bot for scheduling one-time and recurring community announcements.
 
-## Project Structure
+## Overview
 
-```txt
-apps/web          React + Vite dashboard
-apps/bot          Express API, discord.js bot, scheduler worker
-packages/shared  Shared TypeScript types
-supabase          Database schema
+Noobnouncer is built for a Discord server administrator who wants to prepare announcements in a browser and have a bot publish them to the right channel at the chosen time. The dashboard manages the schedule and access list; the bot process sends messages and maintains their delivery history.
+
+This is an MVP and a portfolio project. It is designed as a deployable single-service application, but this repository does not verify a public production deployment or store listing.
+
+## What is implemented
+
+- Password-protected dashboard sessions using signed JSON Web Tokens.
+- Discord server and text-channel discovery after the bot has been invited.
+- Create, edit, disable, and delete scheduled announcements.
+- One-time, daily, weekly, and monthly schedules with a selected timezone.
+- A scheduler that checks for due work every minute and uses a database lock to avoid duplicate sends.
+- Discord member, role, `@everyone`, and `@here` mention selection, subject to Discord permissions.
+- Optional GIF selection through the GIPHY API when a browser-safe GIPHY API key is configured.
+- Delivery logging, persisted delayed deletion of bot-posted messages, and a `.list` bot command for allow-listed server users.
+- Supabase SQL schema and migration files for the application data model.
+
+## Technology
+
+- TypeScript workspaces with npm.
+- React 19 and Vite for the dashboard.
+- Express 5 for the authenticated API and static dashboard hosting.
+- discord.js for Discord gateway, guild, channel, member, and message operations.
+- Supabase (Postgres) for schedules, access rules, and delivery logs.
+- Zod for environment and request validation.
+- Luxon for timezone and recurring-schedule calculations.
+
+## Architecture
+
+The repository is an npm workspace monorepo:
+
+```text
+apps/web          React dashboard
+apps/bot          Express API, Discord client, scheduler, deletion worker
+packages/shared   Shared announcement types and mention/media helpers
+supabase          SQL schema and migration files
 ```
 
-## Discord Setup
+The browser calls the Express API. The API authenticates dashboard requests, synchronizes Discord metadata, and uses the Supabase service-role client only on the server. The same bot process connects to Discord and polls Supabase for due announcements. In a single-service deployment, Express serves the built dashboard from `apps/web/dist`.
 
-1. Open the Discord Developer Portal and create an application.
-2. On the General Information page, copy the Application ID and put it in `.env` as `DISCORD_CLIENT_ID`.
-3. Add a bot, copy the bot token, and put it in `.env` as `DISCORD_TOKEN`.
-4. Enable these privileged gateway intents for the bot:
-   - Message Content Intent
-   - Server Members Intent
-5. Invite the bot with these permissions:
-   - View Channels
-   - Send Messages
-   - Read Message History
-   - Mention Everyone, @here, and All Roles (needed only for @everyone/@here announcements)
-6. Use the dashboard's Invite bot button, or use this invite URL shape:
+## Main product flow
 
-```txt
-https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=199680&scope=bot
-```
+1. An administrator logs in and invites the bot to a Discord server.
+2. The dashboard refreshes that server’s available text channels.
+3. The administrator drafts an announcement, chooses its schedule, repeat rule, and optional GIF or mentions.
+4. The API saves the validated announcement to Supabase.
+5. The scheduler claims due work, posts it through Discord, logs the outcome, and either marks it sent or advances the next recurring occurrence.
+6. A deletion worker removes bot-posted messages after one hour when that action is permitted.
 
-## Supabase Setup
+## My Role
 
-1. Create a Supabase project.
-2. Open the SQL editor and run `supabase/schema.sql`.
-3. Copy your project URL and service role key into `.env`.
+I owned the product end to end: problem framing, UX decisions, data model, dashboard, API, Discord integration, scheduler behavior, deployment configuration, testing, and release readiness. AI-assisted development was used transparently as a development aid; product decisions, architecture, implementation review, integration, testing, and release ownership remained mine.
 
-The web dashboard never receives the service role key. It talks to the local Express API, and the API talks to Supabase server-side.
+## Local setup
 
-## Local Development
+Prerequisites: Node.js/npm, a Discord application and bot, and a Supabase project.
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Fill `.env` locally with your Discord, Supabase, admin, and Vite API values. Never commit `.env`.
+On Windows PowerShell, use `Copy-Item .env.example .env` rather than `cp` if needed. Populate the local `.env` with the required values; it is ignored by Git.
 
-Run the bot/API in one terminal:
+```text
+DISCORD_TOKEN
+DISCORD_CLIENT_ID
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+ADMIN_PASSWORD
+JWT_SECRET
+VITE_API_URL
+VITE_GIPHY_API_KEY
+CORS_ORIGIN
+```
+
+Run `supabase/schema.sql` in the Supabase SQL editor. Then start the two development processes:
 
 ```bash
 npm run dev:bot
-```
-
-Run the dashboard in another terminal:
-
-```bash
 npm run dev:web
 ```
 
-Open `http://localhost:5173`. The API runs on `http://localhost:3001`.
+The dashboard defaults to `http://localhost:5173`; the API defaults to `http://localhost:3001`. Enable Discord’s Message Content and Server Members intents. The bot needs View Channels, Send Messages, and Read Message History; mass mentions additionally require the relevant Discord permission.
 
-The safe `.env.example` file contains placeholders for:
+## Deployment status
 
-```txt
-DISCORD_TOKEN=
-DISCORD_CLIENT_ID=
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-ADMIN_PASSWORD=
-JWT_SECRET=
-VITE_API_URL=http://localhost:3001/api
-VITE_GIPHY_API_KEY=
-CORS_ORIGIN=http://localhost:5173
-```
+The project contains configuration guidance for a single Railway service:
 
-## Using the Dashboard
-
-1. Log in with `ADMIN_PASSWORD`.
-2. Go to Announcements.
-3. Select a server and channel.
-4. Create a message with date, time, timezone, repeat type, and status.
-5. Keep the bot process running. The scheduler checks once per minute.
-
-The default timezone is `Europe/Bucharest`. Times are saved as UTC in Supabase.
-
-Servers are not added manually. Invite the bot to another Discord server with the Invite bot button, then click Refresh servers in the dashboard. The new server appears after Discord adds the bot and the backend syncs the live guild list. If a server has no channels in the dashboard, check that the bot can view and send messages in at least one text channel.
-
-The announcement mention picker supports server members, roles, `@everyone`, and `@here`. Existing servers must grant the bot the Mention Everyone permission in the bot role or target-channel override before mass mentions can send. No Administrator permission is required.
-
-## Allowed Users
-
-The Allowed Users page lets you select a guild, search Discord members, and add them to `allowed_users`.
-
-Only users in `allowed_users` for that guild can use bot commands. For this MVP, dashboard access uses a simple admin password and signed token. The API and UI are structured so Discord OAuth can replace that later.
-
-## Bot Commands
-
-Prefix commands are used for now.
-
-```txt
-.list
-```
-
-`.list` checks the author against `allowed_users` for the guild and replies with upcoming scheduled announcements.
-
-## Scheduler Behavior
-
-The worker runs every minute. It:
-
-- finds due announcements with `status = scheduled`
-- claims each row with a short `locked_until` database lock
-- sends the message to the Discord channel
-- stores the Discord message id and schedules auto-delete for 1 hour later
-- marks one-time announcements as `sent`
-- moves recurring announcements to the next daily, weekly, or monthly `scheduled_at`
-- writes `delivery_logs` rows for sent and failed attempts
-- deletes posted announcement messages after 1 hour using persisted `delivery_logs` state
-
-For auto-delete to work, the bot needs View Channel, Send Messages, and Read Message History in the target channel. Manage Messages is only needed if the bot ever deletes messages not created by itself.
-
-## Railway Deployment
-
-Create one Railway service from this repository.
-
-Recommended settings:
-
-```txt
+```text
 Build command: npm run build
 Start command: npm start
 ```
 
-Add the same environment variables from your local `.env`. For a single-service deploy, set:
+For that setup, use `VITE_API_URL=/api` and set `CORS_ORIGIN` to the public service origin. No Railway configuration file, public URL, store listing, or deployed-environment evidence is committed here, so a public launch is not claimed.
 
-```txt
-CORS_ORIGIN=https://your-railway-domain.up.railway.app
-VITE_API_URL=/api
+## Verification
+
+The repository defines the following automated checks:
+
+```bash
+npm run typecheck
+npm run build
 ```
 
-The Express API serves the built dashboard from `apps/web/dist`, so the Railway service hosts both the web dashboard and bot/API process.
+There is currently no lint script, unit-test script, or committed test suite. Production verification still needs a configured Discord test server and Supabase project to exercise login, Discord permissions, message delivery, recurrence, and delayed deletion.
+
+## Screenshots
+
+No screenshots are currently committed. When available, add real product captures under `docs/screenshots/` and reference them here; do not use mockups or unrelated assets.
+
+## Known limitations
+
+- Dashboard access is a shared admin password, not Discord OAuth or multi-user role-based access control.
+- The scheduler runs inside one bot/API process. High-availability, queue-based processing, retries, and operational alerting are not implemented.
+- The current bot command surface is limited to `.list` for users present in the server’s allow list.
+- GIPHY selection requires a configured browser API key; it is optional.
+- There is no automated test suite or CI workflow in this repository.
+
+## Privacy and security
+
+Never commit `.env` files or service credentials. The browser does not receive the Supabase service-role key; it is used by the Express process only. Dashboard authentication and Discord metadata access should be reviewed before any public deployment, especially because the MVP uses a shared admin password and can send mass mentions when Discord permissions allow them.
+
+## License and repository status
+
+No license file is currently included, so reuse rights have not been granted by this repository. Add an explicit license before accepting external contributions or presenting the code as reusable open source.
