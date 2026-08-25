@@ -29,7 +29,7 @@ create table if not exists public.announcements (
   giphy_title text,
   scheduled_at timestamptz not null,
   timezone text not null default 'Europe/Bucharest',
-  repeat_type text not null default 'none' check (repeat_type in ('none', 'daily', 'weekly', 'monthly')),
+  repeat_type text not null default 'none' constraint announcements_repeat_type_check check (repeat_type in ('none', 'daily', 'weekly', 'every_two_weeks', 'monthly')),
   status text not null default 'scheduled' check (status in ('scheduled', 'sent', 'disabled')),
   created_by text,
   created_at timestamptz not null default now(),
@@ -41,6 +41,11 @@ create table if not exists public.announcements (
 alter table public.announcements add column if not exists gif_url text;
 alter table public.announcements add column if not exists giphy_id text;
 alter table public.announcements add column if not exists giphy_title text;
+
+alter table public.announcements drop constraint if exists announcements_repeat_type_check;
+alter table public.announcements
+  add constraint announcements_repeat_type_check
+  check (repeat_type in ('none', 'daily', 'weekly', 'every_two_weeks', 'monthly'));
 
 create table if not exists public.allowed_users (
   id uuid primary key default gen_random_uuid(),
@@ -123,6 +128,7 @@ with recursive recurring_next as (
     case repeat_type
       when 'daily' then scheduled_at + interval '1 day'
       when 'weekly' then scheduled_at + interval '1 week'
+      when 'every_two_weeks' then scheduled_at + interval '2 weeks'
       when 'monthly' then scheduled_at + interval '1 month'
       else scheduled_at
     end,

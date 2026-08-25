@@ -38,16 +38,11 @@ type Page = "announcements" | "users" | "settings";
 
 const preferenceKeys = {
   guildId: "noobnouncer_last_guild_id",
-  channelByGuild: "noobnouncer_last_channel_by_guild",
-  date: "noobnouncer_last_date"
+  channelByGuild: "noobnouncer_last_channel_by_guild"
 };
 
-function todayUtcDate() {
-  return DateTime.now().setZone("UTC").toISODate() ?? "";
-}
-
-function getStoredDate() {
-  return localStorage.getItem(preferenceKeys.date) || todayUtcDate();
+function todayDate() {
+  return DateTime.now().toISODate() ?? "";
 }
 
 function getStoredChannelMap(): Record<string, string> {
@@ -78,7 +73,7 @@ const defaultForm = {
   gif_url: "",
   giphy_id: "",
   giphy_title: "",
-  date: getStoredDate(),
+  date: todayDate(),
   time: "",
   timezone: "UTC",
   repeat_type: "none",
@@ -88,7 +83,7 @@ const defaultForm = {
 function createEmptyForm(overrides: Partial<typeof defaultForm> = {}) {
   return {
     ...defaultForm,
-    date: getStoredDate(),
+    date: todayDate(),
     time: "",
     timezone: "UTC",
     repeat_type: "none",
@@ -151,7 +146,7 @@ export function App() {
       "";
     setSelectedGuild(initialGuild);
     if (initialGuild) localStorage.setItem(preferenceKeys.guildId, initialGuild);
-    setForm((current) => ({ ...current, guild_id: initialGuild, date: current.date || getStoredDate() }));
+    setForm((current) => ({ ...current, guild_id: initialGuild, date: current.date || todayDate() }));
 
     if (initialGuild) {
       const loadedChannels = await api<Channel[]>(`/guilds/${initialGuild}/channels`);
@@ -245,12 +240,6 @@ export function App() {
       storeChannelForGuild(form.guild_id, form.channel_id);
     }
   }, [form.guild_id, form.channel_id]);
-
-  useEffect(() => {
-    if (form.date) {
-      localStorage.setItem(preferenceKeys.date, form.date);
-    }
-  }, [form.date]);
 
   async function refreshGuilds() {
     setIsRefreshingGuilds(true);
@@ -361,7 +350,6 @@ export function App() {
           });
 
       localStorage.setItem(preferenceKeys.guildId, form.guild_id);
-      localStorage.setItem(preferenceKeys.date, form.date);
       storeChannelForGuild(form.guild_id, form.channel_id);
       setForm(createEmptyForm({ guild_id: form.guild_id, channel_id: form.channel_id, date: form.date }));
       setEditingId(null);
@@ -586,6 +574,7 @@ export function App() {
                     <option value="none">No repeat</option>
                     <option value="daily">Daily</option>
                     <option value="weekly">Weekly</option>
+                    <option value="every_two_weeks">Every 2 weeks</option>
                     <option value="monthly">Monthly</option>
                   </select>
                 </div>

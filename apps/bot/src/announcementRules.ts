@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 
-export type RepeatType = "none" | "daily" | "weekly" | "monthly";
+export type RepeatType = "none" | "daily" | "weekly" | "every_two_weeks" | "monthly";
 export type AnnouncementStatus = "scheduled" | "sent" | "disabled";
 
 type StatusInput = {
@@ -38,6 +38,7 @@ export function nextRecurringScheduledAt(
   do {
     if (repeatType === "daily") next = next.plus({ days: 1 });
     if (repeatType === "weekly") next = next.plus({ weeks: 1 });
+    if (repeatType === "every_two_weeks") next = next.plus({ weeks: 2 });
     if (repeatType === "monthly") next = next.plus({ months: 1 });
   } while (next <= reference);
 

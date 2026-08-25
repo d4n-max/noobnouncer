@@ -39,7 +39,7 @@ const announcementSchema = z.object({
 type AnnouncementRow = z.infer<typeof announcementSchema> & {
   id: string;
   status: "scheduled" | "sent" | "disabled";
-  repeat_type: "none" | "daily" | "weekly" | "monthly";
+  repeat_type: "none" | "daily" | "weekly" | "every_two_weeks" | "monthly";
 };
 
 async function cleanupBadAnnouncementStatuses() {

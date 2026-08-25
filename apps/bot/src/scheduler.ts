@@ -13,7 +13,7 @@ type DueAnnouncement = {
   gif_url: string | null;
   scheduled_at: string;
   timezone: string;
-  repeat_type: "none" | "daily" | "weekly" | "monthly";
+  repeat_type: "none" | "daily" | "weekly" | "every_two_weeks" | "monthly";
 };
 
 type PendingDeleteLog = {
