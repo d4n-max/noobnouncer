@@ -12,7 +12,8 @@
     "dev:bot": "npm run build -w @scheduler/shared && npm run dev -w @scheduler/bot",
     "build": "npm run build -w @scheduler/shared && npm run build -w @scheduler/bot && npm run build -w @scheduler/web",
     "typecheck": "npm run typecheck -w @scheduler/shared && npm run build -w @scheduler/shared && npm run typecheck -w @scheduler/bot && npm run typecheck -w @scheduler/web",
-    "start": "npm run start -w @scheduler/bot"
+    "start": "npm run start -w @scheduler/bot",
+    "test": "npm run build -w @scheduler/shared && npm run test -w @scheduler/bot"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

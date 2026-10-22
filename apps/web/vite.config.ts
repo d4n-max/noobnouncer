@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [react()],
   envDir: path.resolve(__dirname, "../.."),
   server: {
-    port: 5173
+    port: 5173,
+    proxy: { "/api": "http://localhost:3001" }
   }
 });
