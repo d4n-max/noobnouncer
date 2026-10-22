@@ -5,7 +5,7 @@ import { z } from "zod";
 import { env } from "./env.js";
 
 export class HttpError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public retryAfter?: number) { super(message); }
 }
 export const randomToken = () => randomBytes(32).toString("base64url");
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");

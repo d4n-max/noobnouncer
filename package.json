@@ -13,9 +13,14 @@
     "build": "npm run build -w @scheduler/shared && npm run build -w @scheduler/bot && npm run build -w @scheduler/web",
     "typecheck": "npm run typecheck -w @scheduler/shared && npm run build -w @scheduler/shared && npm run typecheck -w @scheduler/bot && npm run typecheck -w @scheduler/web",
     "start": "npm run start -w @scheduler/bot",
-    "test": "npm run build -w @scheduler/shared && npm run test -w @scheduler/bot"
+    "test": "npm run build -w @scheduler/shared && npm run test -w @scheduler/bot && npm run test -w @scheduler/web"
   },
   "devDependencies": {
     "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "@giphy/react-components": {
+      "react-use": "17.6.1"
+    }
   }
 }

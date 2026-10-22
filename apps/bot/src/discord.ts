@@ -66,10 +66,10 @@ export async function syncGuildChannels(guild: Guild) {
   return rows.filter((channel) => channel.can_send);
 }
 
-export async function syncGuild(guildId: string) {
+export async function syncGuild(guildId: string, options = { channels: true }) {
   const guild = await client.guilds.fetch(guildId);
   await upsertGuild(guild);
-  await syncGuildChannels(guild);
+  if (options.channels) await syncGuildChannels(guild);
   return guild;
 }
 

@@ -11,6 +11,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (options.body) headers.set("Content-Type", "application/json");
   if (!["GET", "HEAD", "OPTIONS"].includes((options.method ?? "GET").toUpperCase())) headers.set("X-CSRF-Token", csrfToken);
   const response = await fetch(`${API_URL}${path}`, { ...options, credentials: "include", headers });
+  if (response.headers.get("X-Guild-Discovery-Partial") === "true") {
+    window.dispatchEvent(new CustomEvent("scheduler:discovery-incomplete"));
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     if (response.status === 401) {

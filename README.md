@@ -125,7 +125,7 @@ No screenshots are currently committed. When available, add real product capture
 - The scheduler runs inside one bot/API process. High-availability, queue-based processing, retries, and operational alerting are not implemented.
 - The current bot command surface is limited to `.list` for users present in the server’s allow list.
 - GIPHY selection requires a configured browser API key; it is optional.
-- There is no CI workflow in this repository. Fresh permission checks fail closed during Discord errors/rate limits; login limits are per process.
+- GitHub Actions runs tests, typecheck, build and a high-severity dependency audit on pull requests targeting main; it does not deploy. Fresh permission checks fail closed during Discord errors/rate limits; login limits are per process.
 
 ## Privacy and security
 

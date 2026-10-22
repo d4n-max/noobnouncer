@@ -68,11 +68,13 @@ async function fixture() {
   db.tables.announcements.push(announcement(A, CA), announcement(B, CB));
   db.tables.allowed_users.push({ id: randomUUID(), guild_id: A, discord_user_id: EDITOR });
   db.tables.dashboard_access.push({ id: randomUUID(), guild_id: A, discord_user_id: EDITOR, role: "EDITOR" });
-  const flags = { admin: true, member: true, offline: false, exchangeError: false };
+  const flags = { admin: true, member: true, offline: false, exchangeError: false, unavailableGuildB: false };
   let identity = EDITOR;
   const exchanges: URLSearchParams[] = [];
+  const requests: string[] = [];
   const mockFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
+    requests.push(url.pathname);
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
     if (url.pathname === "/api/oauth2/token") {
       exchanges.push(new URLSearchParams(init?.body as URLSearchParams));
@@ -83,6 +85,7 @@ async function fixture() {
     if (url.pathname === "/api/v10/users/@me/guilds") return json([{ id: A, name: "A", icon: null }, { id: B, name: "B", icon: null }]);
     if (flags.offline) return json({}, 503);
     const guild = url.pathname.includes(A) ? A : B;
+    if (guild === B && flags.unavailableGuildB) return json({}, 503);
     if (/\/members\//.test(url.pathname)) {
       const id = url.pathname.split("/").at(-1)!;
       if (!flags.member || (guild === B && id !== env.BOT_OWNER_DISCORD_ID)) return json({}, 404);
@@ -116,7 +119,7 @@ async function fixture() {
   }
   const call = (path: string, session: { cookie: string; csrf: string }, method = "GET", body?: object) => request(path, { method, headers: { Cookie: session.cookie, Origin: env.CORS_ORIGIN, "X-CSRF-Token": session.csrf, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const close = () => new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); });
-  return { db, flags, exchanges, request, start, login, call, close };
+  return { db, flags, exchanges, requests, request, start, login, call, close };
 }
 async function check(name: string, run: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
   await test(name, async () => { const f = await fixture(); try { await run(f); } finally { await f.close(); } });
@@ -233,7 +236,9 @@ await check("Discord administrator revocation and unverifiable permissions fail 
   f.flags.admin = false;
   assert.equal((await f.call(`/api/announcements?guild_id=${A}`, s)).status, 403);
   f.flags.admin = true; f.flags.offline = true;
-  assert.equal((await f.call(`/api/guilds/${A}/dashboard-access`, s)).status, 403);
+  const unavailable = await f.call(`/api/guilds/${A}/dashboard-access`, s);
+  assert.equal(unavailable.status, 503);
+  assert.ok(Number(unavailable.headers.get("Retry-After")) >= 1);
 });
 await check("CSRF rejects missing/invalid tokens and foreign origins, including logout", async f => {
   const s = await f.login();
@@ -292,4 +297,37 @@ await check("Authenticated API traffic has a per-user rate limit", async f => {
   const s = await f.login();
   for (let i = 0; i < 119; i++) assert.equal((await f.call("/api/auth/me", s)).status, 200);
   assert.equal((await f.call("/api/auth/me", s)).status, 429);
+});
+await check("Owner discovery uses the fresh bot guild list without fetching every guild", async f => {
+  const s = await f.login(env.BOT_OWNER_DISCORD_ID); f.requests.length = 0;
+  const response = await f.call("/api/guilds", s);
+  assert.equal(response.status, 200); assert.equal((await response.json()).length, 2);
+  assert.deepEqual(f.requests, ["/api/v10/users/@me/guilds"]);
+});
+await check("Management middleware shares decisions within one request and refreshes next request", async f => {
+  const s = await f.login(ADMIN); f.requests.length = 0;
+  assert.equal((await f.call(`/api/guilds/${A}/dashboard-access`, s)).status, 200);
+  assert.equal(f.requests.length, 3, "Guild, membership and roles should each be fetched once");
+  f.flags.admin = false; f.requests.length = 0;
+  assert.equal((await f.call(`/api/guilds/${A}/dashboard-access`, s)).status, 403);
+  assert.equal(f.requests.length, 3, "The next request must revalidate revoked permissions");
+});
+await check("Partial guild outage excludes unverifiable servers and marks discovery incomplete", async f => {
+  const s = await f.login(ADMIN); f.flags.unavailableGuildB = true;
+  const response = await f.call("/api/guilds", s);
+  assert.equal(response.status, 200); assert.equal(response.headers.get("X-Guild-Discovery-Partial"), "true");
+  assert.deepEqual((await response.json()).map((g: any) => g.id), [A]);
+  assert.equal((await f.call(`/api/announcements?guild_id=${B}`, s)).status, 503);
+});
+await check("A total discovery outage returns a retryable error, not an empty authorized list", async f => {
+  const s = await f.login(ADMIN); f.flags.offline = true;
+  const response = await f.call("/api/guilds", s);
+  assert.equal(response.status, 503); assert.ok(response.headers.get("Retry-After"));
+});
+await check("Retained legacy rollback credentials do not reactivate password authentication", async f => {
+  const parsed = envSchema.parse({ ...env, ADMIN_PASSWORD: "rollback-only-fixture", JWT_SECRET: "rollback-only-fixture-secret" });
+  assert.ok(!("ADMIN_PASSWORD" in parsed)); assert.ok(!("JWT_SECRET" in parsed));
+  assert.equal((await f.request("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "rollback-only-fixture" }) })).status, 401);
+  const session = await f.login();
+  assert.equal((await f.call("/api/auth/login", session, "POST", { password: "rollback-only-fixture" })).status, 404);
 });

@@ -18,6 +18,7 @@ import { api, clearSession, discordLoginUrl, validateSession, type SessionInfo }
 import { GiphyPickerModal } from "./GiphyPickerModal";
 import { MentionPickerModal, type MentionSelection } from "./MentionPickerModal";
 import { TIMEZONE_OPTIONS } from "./timezones";
+import { EmptyGuildState } from "./EmptyGuildState";
 
 const AUTO_DELETE_LABEL = "1 hour";
 const GIPHY_API_KEY = import.meta.env.VITE_GIPHY_API_KEY?.trim() ?? "";
@@ -184,7 +185,12 @@ export function App() {
       setError("Access was denied or changed. Refresh servers to check your permissions.");
     }
     window.addEventListener("scheduler:access-denied", denied);
-    return () => window.removeEventListener("scheduler:access-denied", denied);
+    const incomplete = () => setError("Some servers could not be verified by Discord. Only verified servers are shown. Please refresh shortly.");
+    window.addEventListener("scheduler:discovery-incomplete", incomplete);
+    return () => {
+      window.removeEventListener("scheduler:access-denied", denied);
+      window.removeEventListener("scheduler:discovery-incomplete", incomplete);
+    };
   }, [session]);
 
   useEffect(() => {
@@ -480,11 +486,8 @@ export function App() {
       {isCheckingSession ? <p>Checking session…</p> : <a className="discord-login" href={discordLoginUrl}>Login with Discord</a>}
     </section></main>;
   }
-  if (!guilds.length) return <main className="login-screen"><section className="login-panel">
-    <h1>No authorized servers</h1><p>Signed in as {session.user.username}. Ask a server administrator to grant editor access, or use an account with Manage Server permission.</p>
-    {error && <p role="alert">{error}</p>}
-    <button onClick={refreshGuilds}>Refresh servers</button><button onClick={logout}>Logout</button>
-  </section></main>;
+  if (!guilds.length) return <EmptyGuildState session={session} error={error} refreshing={isRefreshingGuilds}
+    onRefresh={refreshGuilds} onInvite={openInviteUrl} onLogout={logout} />;
 
   return (
     <div className="app-shell">

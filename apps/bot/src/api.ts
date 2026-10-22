@@ -126,7 +126,14 @@ function sortAnnouncementsForDashboard<T extends {
 export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; maintenance?: boolean; sync?: typeof syncGuild } = {}) {
   const db = deps.db ?? supabase;
   const auth = createAuth(db, deps.fetcher);
-  const access = createAuthorization(db, deps.fetcher);
+  const authorization = createAuthorization(db, deps.fetcher);
+  function accessFor(res: express.Response): ReturnType<typeof authorization.forRequest> { return res.locals.access; }
+  async function discover(res: express.Response) {
+    const access = accessFor(res);
+    const guilds = await access.guilds(context(res).user);
+    if (access.discoveryIncomplete) res.set("X-Guild-Discovery-Partial", "true");
+    return guilds;
+  }
   const sync = deps.sync ?? syncGuild;
   const app = express();
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -142,7 +149,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
     res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" }); next();
   });
   app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
-  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true, exposedHeaders: ["X-Guild-Discovery-Partial", "Retry-After"] }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.static(webDist));
 
@@ -162,6 +169,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   app.get("/api/auth/discord", auth.start);
   app.get("/api/auth/discord/callback", auth.callback);
   app.use("/api", auth.requireSession);
+  app.use("/api", (_req, res, next) => { res.locals.access = authorization.forRequest(); next(); });
   const userRequests = new Map<string, { count: number; until: number }>();
   app.use("/api", (_req, res, next) => {
     const now = Date.now();
@@ -178,13 +186,13 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
     res.json({ user: { ...user, avatar_url: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null }, csrfToken, isBotOwner: user.id === env.BOT_OWNER_DISCORD_ID });
   });
   app.post("/api/auth/logout", auth.logout);
-  app.get("/api/guilds", async (_req, res) => res.json(await access.guilds(context(res).user)));
+  app.get("/api/guilds", async (_req, res) => res.json(await discover(res)));
   app.post("/api/guilds/refresh", async (_req, res) => {
-    const guilds = await access.guilds(context(res).user);
+    const guilds = await discover(res);
     res.json({ guilds, added: 0 });
   });
   app.use("/api/guilds/:guildId", async (req, res, next) => {
-    try { res.locals.guildRole = await access.role(context(res).user, req.params.guildId); next(); }
+    try { res.locals.guildRole = await accessFor(res).role(context(res).user, req.params.guildId); next(); }
     catch (error) { next(error); }
   });
   const requiredGuild = (value: unknown) => z.string().regex(/^\d{17,20}$/).parse(value);
@@ -196,22 +204,22 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
     return data;
   }
   app.get("/api/guilds/:guildId/dashboard-access", async (req, res) => {
-    await access.role(context(res).user, req.params.guildId, true);
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
     const { data, error } = await db.from("dashboard_access").select("*").eq("guild_id", req.params.guildId);
     if (error) throw new HttpError(503, "Data service unavailable");
     res.json(data);
   });
   app.post("/api/guilds/:guildId/dashboard-access", async (req, res) => {
-    await access.role(context(res).user, req.params.guildId, true);
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
     const { discord_user_id } = z.object({ discord_user_id: z.string().regex(/^\d{17,20}$/) }).strict().parse(req.body);
-    await access.discord<LiveMember>(`/guilds/${req.params.guildId}/members/${discord_user_id}`);
-    await sync(req.params.guildId);
+    await accessFor(res).discord<LiveMember>(`/guilds/${req.params.guildId}/members/${discord_user_id}`);
+    await sync(req.params.guildId, { channels: false });
     const { data, error } = await db.from("dashboard_access").upsert({ guild_id: req.params.guildId, discord_user_id, role: "EDITOR", granted_by: context(res).user.id, updated_at: new Date().toISOString() }, { onConflict: "guild_id,discord_user_id" }).select().single();
     if (error) throw new HttpError(503, "Data service unavailable");
     res.status(201).json(data);
   });
   app.delete("/api/guilds/:guildId/dashboard-access/:userId", async (req, res) => {
-    await access.role(context(res).user, req.params.guildId, true);
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
     const { error } = await db.from("dashboard_access").delete().eq("guild_id", req.params.guildId).eq("discord_user_id", requiredGuild(req.params.userId));
     if (error) throw new HttpError(503, "Data service unavailable");
     res.status(204).end();
@@ -237,7 +245,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   });
 
   app.get("/api/guilds/:guildId/channels", async (req, res) => {
-    const guild = await sync(req.params.guildId);
+    const guild = await sync(req.params.guildId, { channels: false });
     res.json(await syncGuildChannels(guild));
   });
 
@@ -267,7 +275,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   });
 
   app.get("/api/guilds/:guildId/users", async (req, res) => {
-    await access.role(context(res).user, req.params.guildId, true);
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
     const guild = await client.guilds.fetch(req.params.guildId);
     const query = String(req.query.search ?? "").trim();
     if (!query) {
@@ -287,8 +295,8 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   });
 
   app.get("/api/announcements", async (req, res) => {
-    const guildIds = req.query.guild_id ? [requiredGuild(req.query.guild_id)] : (await access.guilds(context(res).user)).map(g => g.id);
-    if (req.query.guild_id) await access.role(context(res).user, guildIds[0]);
+    const guildIds = req.query.guild_id ? [requiredGuild(req.query.guild_id)] : (await discover(res)).map(g => g.id);
+    if (req.query.guild_id) await accessFor(res).role(context(res).user, guildIds[0]);
     if (!guildIds.length) return res.json([]);
     const { data, error } = await db
       .from("announcements")
@@ -299,8 +307,8 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
 
   app.post("/api/announcements", async (req, res) => {
     const payload = announcementSchema.parse(req.body);
-    await access.role(context(res).user, payload.guild_id);
-    await access.channel(payload.guild_id, payload.channel_id);
+    await accessFor(res).role(context(res).user, payload.guild_id);
+    await accessFor(res).channel(payload.guild_id, payload.channel_id);
     await sync(payload.guild_id);
     const normalized = normalizeAnnouncementSchedule(payload);
     const normalizedPayload = {
@@ -317,9 +325,9 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   app.put("/api/announcements/:id", async (req, res) => {
     const payload = announcementSchema.partial().parse(req.body);
     const existing = await resource("announcements", req.params.id);
-    await access.role(context(res).user, existing.guild_id);
+    await accessFor(res).role(context(res).user, existing.guild_id);
     if (payload.guild_id !== undefined && payload.guild_id !== existing.guild_id) throw new HttpError(403, "Announcements cannot move between servers");
-    await access.channel(existing.guild_id, payload.channel_id ?? existing.channel_id);
+    await accessFor(res).channel(existing.guild_id, payload.channel_id ?? existing.channel_id);
     if (payload.channel_id) await sync(existing.guild_id);
 
     const nextValues = {
@@ -354,7 +362,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
 
   app.delete("/api/announcements/:id", async (req, res) => {
     const existing = await resource("announcements", req.params.id);
-    await access.role(context(res).user, existing.guild_id);
+    await accessFor(res).role(context(res).user, existing.guild_id);
     const { error } = await db.from("announcements").delete().eq("id", req.params.id).eq("guild_id", existing.guild_id);
     if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(204).end();
@@ -362,7 +370,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
 
   app.get("/api/allowed-users", async (req, res) => {
     const guildId = requiredGuild(req.query.guild_id);
-    await access.role(context(res).user, guildId, true);
+    await accessFor(res).role(context(res).user, guildId, true);
     const query = db.from("allowed_users").select("*").eq("guild_id", guildId).order("created_at", { ascending: false });
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: "Data service unavailable" });
@@ -379,10 +387,10 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
         avatar_url: z.string().nullable().optional()
       })
       .parse(req.body);
-    await access.role(context(res).user, payload.guild_id, true);
-    const member = await access.discord<LiveMember>(`/guilds/${payload.guild_id}/members/${requiredGuild(payload.discord_user_id)}`);
+    await accessFor(res).role(context(res).user, payload.guild_id, true);
+    const member = await accessFor(res).discord<LiveMember>(`/guilds/${payload.guild_id}/members/${requiredGuild(payload.discord_user_id)}`);
     payload.username = member.user.username;
-    await sync(payload.guild_id);
+    await sync(payload.guild_id, { channels: false });
     const { data, error } = await db
       .from("allowed_users")
       .upsert(payload, { onConflict: "guild_id,discord_user_id" })
@@ -394,7 +402,7 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
 
   app.delete("/api/allowed-users/:id", async (req, res) => {
     const existing = await resource("allowed_users", req.params.id);
-    await access.role(context(res).user, existing.guild_id, true);
+    await accessFor(res).role(context(res).user, existing.guild_id, true);
     const { error } = await db.from("allowed_users").delete().eq("id", req.params.id).eq("guild_id", existing.guild_id);
     if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(204).end();
@@ -426,7 +434,10 @@ export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; 
   });
 
   const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
-    if (error instanceof HttpError) return void res.status(error.status).json({ error: error.message });
+    if (error instanceof HttpError) {
+      if (error.retryAfter) res.set("Retry-After", String(error.retryAfter));
+      return void res.status(error.status).json({ error: error.message });
+    }
     if (error instanceof z.ZodError || error instanceof SyntaxError) return void res.status(400).json({ error: "Invalid request data" });
     res.status(503).json({ error: "Service unavailable. Please try again." });
   };

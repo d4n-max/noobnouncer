@@ -1,6 +1,6 @@
 # Discord dashboard authentication: setup and release
 
-Implementation is local. No production migration, Discord settings, Railway variables or deployment have been changed.
+The implementation is on the feature branch. This hardening pass changes code and documentation only; it does not apply migrations, modify production variables, merge main, or deploy.
 
 ## Access model and security contract
 
@@ -64,7 +64,7 @@ VITE_API_URL=/api
 DEFAULT_TIMEZONE=Europe/Bucharest
 ```
 
-Also supply DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, BOT_OWNER_DISCORD_ID, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. VITE_GIPHY_API_KEY remains optional and browser-safe. ADMIN_PASSWORD and JWT_SECRET are unused and no longer required. Old browser JWTs are removed on dashboard load. Do not use VITE_ for any backend secret.
+Also supply DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, BOT_OWNER_DISCORD_ID, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. VITE_GIPHY_API_KEY remains optional and browser-safe. ADMIN_PASSWORD and JWT_SECRET are ignored by the OAuth release, but must be retained securely, with their exact previous values, in the existing Railway service and the operator secret manager throughout the rollback window. Do not delete, print, commit or rotate them during that window. Old browser JWTs are removed on dashboard load. Do not use VITE_ for any backend secret.
 
 Run `npm install`, then `npm run dev:bot` and `npm run dev:web` in separate terminals. Open http://localhost:5173 consistently, not 127.0.0.1. Vite proxies /api to localhost:3001. Direct callback to http://localhost:3001/api/auth/discord/callback is also supported if registered exactly and set in DISCORD_REDIRECT_URI, but the same-origin Vite URL is preferred. Use one hostname throughout so cookies are consistent.
 
@@ -83,7 +83,7 @@ TRUST_PROXY_HOPS=1
 DEFAULT_TIMEZONE=Europe/Bucharest
 ```
 
-4. Supply DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET and BOT_OWNER_DISCORD_ID. Retain DISCORD_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and optional VITE_GIPHY_API_KEY. Railway supplies PORT; do not hardcode it. Remove ADMIN_PASSWORD and JWT_SECRET when rolling out the replacement. All existing password sessions become invalid with the new code.
+4. Supply DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET and BOT_OWNER_DISCORD_ID. Retain DISCORD_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and optional VITE_GIPHY_API_KEY. Railway supplies PORT; do not hardcode it. Retain ADMIN_PASSWORD and JWT_SECRET with their exact prior values throughout the rollback window; they are required by the previous password-auth release and are not used by the OAuth handlers. All existing password sessions become invalid with the new code.
 5. Build command: `npm run build`. Start command: `npm start`. Ensure VITE_API_URL=/api is present during build, because Vite embeds it. Serve the frontend from this same Express service over HTTPS, with no wildcard CORS or cross-site cookie deployment.
 6. TRUST_PROXY_HOPS=1 trusts only the last proxy, not arbitrary chains. Ensure the production listener is reachable exclusively through Railway's HTTPS reverse proxy. Use 0 outside that topology. Keep the existing replica count and operational configuration. Login limiting is per process (20 attempts/minute/IP); multiple replicas need shared/edge limits before broader public use.
 7. Deploy the reviewed changes using the existing release process only after authorization. Check /health, then perform the manual tests below. Remove any proxy logs of OAuth callback query strings/cookies. No deploy command has been executed here.
@@ -106,9 +106,9 @@ Grant/revoke an editor in one server, remove their Discord membership, and remov
 
 Create a real one-time and recurring announcement with the desired timezone, GIF and mentions; verify delivery logs, locking/duplicate prevention and one-hour automatic deletion. Confirm scheduling continues after all dashboard users log out. Hosted schema/service-role queries, the Railway proxy path, provider rate limits and these real deliveries remain unverified until this manual acceptance.
 
-## Remaining limitations
+## Initial implementation limitations (superseded by hardening below)
 
-Fresh permission checks trade API latency and Discord rate-limit usage for immediate revocation. Discord outages/rate limits deny access; the UI may show no authorized servers until refresh. No permission cache is intentionally used. OAuth grant revocation is best-effort after login, and users must log in again after 24 hours. Profile names/avatars refresh on login. No permanent user-token storage or refresh-token infrastructure is introduced.
+Fresh permission checks trade API latency and Discord rate-limit usage for immediate revocation. Discord outages/rate limits deny access; the UI may show no authorized servers until refresh. No cross-request permission-result cache is used. Request-scoped decisions are shared by middleware and handlers, and discarded after that request. OAuth grant revocation is best-effort after login, and users must log in again after 24 hours. Profile names/avatars refresh on login. No permanent user-token storage or refresh-token infrastructure is introduced.
 
 The dependency audit still reports pre-existing moderate/high advisories outside the authentication replacement. The critical proxy-addr advisory was addressed with a compatible transitive update; GIPHY/browser tooling and Discord dependency advisories require a separate compatibility review before a public rollout. Do not run audit fix --force blindly. No claim of production security acceptance is made from mocked tests.
 
@@ -141,3 +141,67 @@ Modified:
 Local result on 2026-10-22: 27 tests passed with the pre-existing working-tree test edits included. The publication snapshot preserves those edits locally and has 26 passing tests, 0 failed; TypeScript typecheck and production build also passed. SQL and fixture-browser results are described above. The full dependency audit reports 15 advisories (6 moderate, 9 high, 0 critical). Authenticated API requests are limited to 120/minute/user/process in addition to login limits.
 
 The user's existing announcementRules.test.ts edits and pre-existing untracked migration/backup files were preserved. Implementation ran directly under the handoff skill's dirty-working-tree rule; no worker delegation/correction pass was applicable. The initial implementation phase performed no commit, push, live database change or deployment. GitHub publication is a separate step; it does not authorize a production release.
+
+## Rollback window and exact rollback procedure
+
+This is a manual runbook, not authorization to perform a release. No production variables are changed by the feature-branch push.
+
+Before a controlled OAuth release, record the known-good password-auth revision **6959790949c91fbdec9010e9e5627eac0025ada3**, its Railway deployment/image ID, public URL, replica count, and build/start commands. Keep the old image if Railway retention permits. Back up the existing scheduler tables. Retain the existing **ADMIN_PASSWORD** (minimum 8 characters in that release) and **JWT_SECRET** (minimum 16 characters) securely in the existing Railway service and the operator's secret manager. Also retain DISCORD_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CORS_ORIGIN, DEFAULT_TIMEZONE and the build-time VITE_API_URL=/api. Never put secrets in a rollback command, commit, issue, screenshot or CI variable. Extra OAuth variables are harmless to the previous Zod schema, which strips unknown fields.
+
+Keep these legacy credentials through completion of controlled multi-server acceptance and a seven-day stable observation window, whichever ends later. Record the owner who closes the window explicitly. Only after that decision may an authorized operator remove the unused variables and retire old release artifacts. OAuth has no password fallback endpoint; retention does not reactivate shared-password login in the new release.
+
+If rollback is needed:
+
+1. **Restrict dashboard access first.** The password release has global administrator access and no tenant isolation. Put the dashboard behind the established operator-only network/access gate or maintenance procedure; stop editor/public dashboard acceptance. Leave the bot/scheduler running unless incident response specifically requires otherwise. Old JWTs signed with the retained secret may become valid again, including long-lived Remember Device tokens; treat all prior token holders as global administrators during rollback.
+2. In the existing Railway **noobnouncer / production** service, select the recorded known-good password deployment, verify its source SHA is exactly **6959790949c91fbdec9010e9e5627eac0025ada3**, and use its rollback/redeploy action **only if the retained artifact is available**. Do not redeploy the latest OAuth deployment by mistake. Preserve the service, database, volume, replica and source-branch configuration.
+3. If that image has expired, rebuild the exact old source in an isolated checkout. From a separate operator shell with explicit release authorization, use the following PowerShell commands. Choose a new, nonexistent checkout directory; do not reset this working tree or change main:
+
+```powershell
+git fetch origin
+git worktree add --detach C:\Temp\noobnouncer-password-rollback 6959790949c91fbdec9010e9e5627eac0025ada3
+Set-Location C:\Temp\noobnouncer-password-rollback
+npm ci
+npm run typecheck
+npm run build
+# DEPLOYMENT: execute only as the separately authorized rollback action.
+railway up --project 13af5b5b-f7b0-49e4-886d-bd7c0104a1e1 --service noobnouncer --environment production --ci
+```
+
+The Railway IDs/service above identify the existing project observed during the publication check. Verify the destination in the dashboard immediately before using the command. `railway up` uploads this isolated source and uses the service's retained variables and build settings. Do not use --new, --no-gitignore, or commands that create or reconnect a service. The local build requires no production credential values. If an operator needs a real password-auth startup check, supply credentials only through the approved secret mechanism, never in command arguments or logs.
+
+4. **Do not reverse the auth migration.** dashboard_users, dashboard_access, dashboard_sessions and dashboard_oauth_states are additive and ignored by the old release. Keep them, all existing guilds/channels/announcements/allowed_users/delivery_logs, and their grants. Do not restore an old database backup over announcements created since release. There are no hardening migrations.
+5. Verify the Railway deployment source SHA and successful runtime status. `GET https://noobnouncer-production.up.railway.app/health` must return `{ "ok": true }`. In a fresh/private browser, `/api/auth/me` without credentials must return 401 and the old password form must render. Log in using the retained password without capturing or sharing it; verify authenticated API access, guild/channel discovery and create/edit/disable/delete in a controlled server. OAuth-only sessions should not authenticate the old API; its bearer JWTs are a different mechanism. Re-login is expected because the OAuth frontend removed old browser tokens.
+6. Verify scheduler startup, a controlled delivery and delivery_logs persistence, recurrence in the selected timezone, duplicate-send protection and one-hour deletion. Confirm .list still uses allowed_users. Compare row counts/IDs with the pre-release record; never delete real announcement rows as a rollback check. Keep public/editor dashboard access closed while the legacy release is active.
+7. Record the rollback result and incident cause. To try OAuth again, deploy the reviewed OAuth revision through a separately authorized release, keep the legacy variables during the renewed rollback window, retain the additive auth tables, and rerun all manual OAuth/tenant acceptance checks before reopening access.
+
+## Guild discovery and Discord failure behavior after hardening
+
+A protected HTTP request creates one authorization scope. Middleware and management handlers share its in-flight/completed decision for the same user and guild, reducing an admin management request from six permission REST reads to three. Nothing grants access from another HTTP request's result: the next request fetches fresh guild metadata, membership and role bitfields, and queries explicit editor assignments again. Guild owners skip the unnecessary role-list read after fresh guild/member verification. The Bot Owner's discovery uses the freshly paginated bot guild list directly, avoiding N additional guild reads; resource operations still verify bot installation with a guild read. Channel listing synchronizes channels once rather than twice, and granting dashboard/.list access avoids unnecessary channel enumeration.
+
+Authorization REST reads are serialized per API process, with a maximum queue of 100, three attempts, a 15-second authorization-scope budget (including queue time), and a five-second maximum individual fetch timeout. Discord 429 handling honors retry_after, Retry-After, global throttling and rate-limit reset headers. A delay beyond the remaining request budget produces 503 with Retry-After instead of retrying early. Network errors and 5xx get bounded backoff; 403/404 deny immediately. No stale-allow fallback exists. This limiter coordinates these dashboard authorization calls only: discord.js gateway/synchronization/scheduler traffic uses its own limiter, and multiple replicas need shared/edge coordination for bot-wide rate limits.
+
+A failed guild is excluded from discovery; other guilds may still be returned if independently verified. Such a partial result carries X-Guild-Discovery-Partial and the frontend shows a refresh warning. If no guild can be returned because verification failed, the API returns 503 rather than misrepresenting an outage as an empty authorized-server list. A genuine user with no access still sees the existing friendly guidance. In that empty state only BOT_OWNER sees Invite bot, using the existing authenticated invite endpoint; other users do not gain onboarding permissions.
+
+## Dependency audit and CI after hardening
+
+See [the complete dependency report](security/dependency-audit.md), [baseline JSON](security/npm-audit-baseline.json) and [current JSON](security/npm-audit.json). Counts refer to npm's affected-package entries, not distinct CVEs. The baseline is the committed 2deb027 dependency tree. Compatible updates and a scoped react-use patch override remove all high findings. The remaining uuid/GIPHY finding and its shipped code path are documented rather than hidden by an incompatible downgrade or forced major override.
+
+The GitHub Actions workflow `.github/workflows/ci.yml` runs only for pull requests targeting main: npm ci, npm test, npm run typecheck, npm run build and an audit gate at high severity. It uses Node 22, read-only contents permission, pinned checkout/setup-node actions, no persisted checkout credentials, no production secrets, no deployment step, and no pull_request_target trigger. Tests create fake configuration before importing backend modules. A feature-branch push alone does not start this workflow. No PR is created as part of this task; hosted CI execution remains unverified until an authorized PR is opened.
+
+## Hardening verification result and acceptance decision
+
+On 2026-10-22, a clean snapshot of the staged publication files (excluding the pre-existing local announcementRules.test.ts edits and every .env/local SQL file) was installed with **npm ci** and verified using **Node 22.23.4**, matching the CI major line:
+
+- npm test: **46 passed, 0 failed** (43 backend, 3 frontend).
+- The original working tree on Node 24 additionally passes its preserved local test: **47 passed, 0 failed**.
+- npm run typecheck: passed.
+- npm run build: passed; a clean build uses the default /api URL without any .env file or production secret.
+- npm audit --json: exit **1**, correctly reporting **2 moderate affected entries**, **0 high**, **0 critical**. Raw final JSON is committed in docs/security/npm-audit.json.
+- npm audit --audit-level=high: exit **0**. The CI gate allows the documented moderate finding and fails on future high/critical findings.
+- Browser fixture checks: the empty Bot Owner screen offers Invite bot; a normal unauthorized identity remains covered by the frontend regression test; the GIPHY picker mounts and renders a mocked empty response using react-use 17.6.1 with no browser errors. No real Discord invite or GIPHY account request was performed.
+- Vite production module analysis: only uuid rng/stringify/native/v4 modules are rendered. Vulnerable v3/v5 implementations are absent. Evidence: docs/security/bundle-reachability.json.
+- Security regression tests include OAuth/session/CSRF isolation, fresh editor/admin revocation, per-request deduplication, partial/total discovery outages, 429/global cooldown behavior, bounded transient retries, Retry-After, released error response bodies, unchanged scheduler behavior, and retained legacy credentials being ignored by the OAuth release.
+
+**Decision: ready to enter controlled production acceptance testing, with the documented moderate browser dependency finding retained for follow-up.** This is not approval to deploy or open public access. Hosted GitHub Actions has not run because no PR was opened. Real OAuth consent/callback, actual Discord permissions and revocation, hosted Supabase/session persistence, the Railway proxy and real delivery/deletion still need the controlled checks above. Keep rollback secrets and operator-only rollback procedures available until the acceptance and rollback windows close.
+
+The hardening commit/push targets only feature/discord-oauth-multiuser. main, production environment values, service settings and database state are unchanged. No migration is introduced or applied. The user's unrelated test edit, .env, SQL backup and 43 pre-existing SQL migrations remain local and unmodified. No DeepSeek worker/correction pass was used because the repository was dirty at task start.
