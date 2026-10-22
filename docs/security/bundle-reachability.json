@@ -1,0 +1,41 @@
+{
+  "build": "Vite production with write:false",
+  "finding": "GHSA-w5hq-g745-h8pq",
+  "renderedModules": [
+    {
+      "module": "node_modules/uuid/dist/esm-browser/rng.js",
+      "renderedExports": [
+        "default"
+      ],
+      "removedExports": [],
+      "renderedLength": 823
+    },
+    {
+      "module": "node_modules/uuid/dist/esm-browser/stringify.js",
+      "renderedExports": [
+        "unsafeStringify"
+      ],
+      "removedExports": [
+        "default"
+      ],
+      "renderedLength": 938
+    },
+    {
+      "module": "node_modules/uuid/dist/esm-browser/native.js",
+      "renderedExports": [
+        "default"
+      ],
+      "removedExports": [],
+      "renderedLength": 137
+    },
+    {
+      "module": "node_modules/uuid/dist/esm-browser/v4.js",
+      "renderedExports": [
+        "default"
+      ],
+      "removedExports": [],
+      "renderedLength": 411
+    }
+  ],
+  "affectedImplementationsRendered": 0
+}

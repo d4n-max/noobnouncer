@@ -10,10 +10,11 @@ This is an MVP and a portfolio project. It is designed as a deployable single-se
 
 ## What is implemented
 
-- Password-protected dashboard sessions using signed JSON Web Tokens.
+- Discord OAuth2 login with PKCE, database-backed cookie sessions, CSRF protection and per-server owner/admin/editor authorization.
+- Server-specific Dashboard Access editor grants, separate from the .list command access list.
 - Discord server and text-channel discovery after the bot has been invited.
 - Create, edit, disable, and delete scheduled announcements.
-- One-time, daily, weekly, and monthly schedules with a selected timezone.
+- One-time, daily, weekly, every-two-weeks, and monthly schedules with a selected timezone.
 - A scheduler that checks for due work every minute and uses a database lock to avoid duplicate sends.
 - Discord member, role, `@everyone`, and `@here` mention selection, subject to Discord permissions.
 - Optional GIF selection through the GIPHY API when a browser-safe GIPHY API key is configured.
@@ -72,21 +73,24 @@ DISCORD_TOKEN
 DISCORD_CLIENT_ID
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
-ADMIN_PASSWORD
-JWT_SECRET
+DISCORD_CLIENT_SECRET
+DISCORD_REDIRECT_URI
+BOT_OWNER_DISCORD_ID
+NODE_ENV
+TRUST_PROXY_HOPS
 VITE_API_URL
 VITE_GIPHY_API_KEY
 CORS_ORIGIN
 ```
 
-Run `supabase/schema.sql` in the Supabase SQL editor. Then start the two development processes:
+For a fresh database, run `supabase/schema.sql` in the Supabase SQL editor. For an existing database, apply only the new auth migration as described in [the OAuth deployment guide](docs/discord-oauth-deployment.md). That guide includes exact Discord Developer Portal, local environment, Railway, migration-order and manual acceptance instructions. Then start the two development processes:
 
 ```bash
 npm run dev:bot
 npm run dev:web
 ```
 
-The dashboard defaults to `http://localhost:5173`; the API defaults to `http://localhost:3001`. Enable Discord’s Message Content and Server Members intents. The bot needs View Channels, Send Messages, and Read Message History; mass mentions additionally require the relevant Discord permission.
+The dashboard defaults to `http://localhost:5173`; Vite proxies `/api` to `http://localhost:3001`. Use `VITE_API_URL=/api`, `DISCORD_REDIRECT_URI=http://localhost:5173/api/auth/discord/callback` and `CORS_ORIGIN=http://localhost:5173`. Enable Discord’s Message Content and Server Members intents. The bot needs View Channels, Send Messages, and Read Message History; mass mentions additionally require the relevant Discord permission.
 
 ## Deployment status
 
@@ -104,11 +108,12 @@ For that setup, use `VITE_API_URL=/api` and set `CORS_ORIGIN` to the public serv
 The repository defines the following automated checks:
 
 ```bash
+npm test
 npm run typecheck
 npm run build
 ```
 
-There is currently no lint script, unit-test script, or committed test suite. Production verification still needs a configured Discord test server and Supabase project to exercise login, Discord permissions, message delivery, recurrence, and delayed deletion.
+The API has mocked HTTP authentication/authorization integration tests and recurrence regression tests. There is no lint script. Production verification still needs a configured Discord test server and Supabase project to exercise login, Discord permissions, message delivery, recurrence, and delayed deletion.
 
 ## Screenshots
 
@@ -116,15 +121,15 @@ No screenshots are currently committed. When available, add real product capture
 
 ## Known limitations
 
-- Dashboard access is a shared admin password, not Discord OAuth or multi-user role-based access control.
+- Live Discord OAuth, hosted Supabase migrations, the Railway proxy and real multi-server delivery still require manual acceptance; local tests are not production proof.
 - The scheduler runs inside one bot/API process. High-availability, queue-based processing, retries, and operational alerting are not implemented.
 - The current bot command surface is limited to `.list` for users present in the server’s allow list.
 - GIPHY selection requires a configured browser API key; it is optional.
-- There is no automated test suite or CI workflow in this repository.
+- GitHub Actions runs tests, typecheck, build and a high-severity dependency audit on pull requests targeting main; it does not deploy. Fresh permission checks fail closed during Discord errors/rate limits; login limits are per process.
 
 ## Privacy and security
 
-Never commit `.env` files or service credentials. The browser does not receive the Supabase service-role key; it is used by the Express process only. Dashboard authentication and Discord metadata access should be reviewed before any public deployment, especially because the MVP uses a shared admin password and can send mass mentions when Discord permissions allow them.
+Never commit `.env` files or service credentials. The browser does not receive the Supabase service-role key; it is used by the Express process only. Dashboard authentication and Discord metadata access should be reviewed before any public deployment, including mass-mention permissions, dependency advisories and the manual checks in the OAuth deployment guide. The shared password and browser-stored JWT implementation have been removed.
 
 ## License and repository status
 

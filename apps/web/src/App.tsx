@@ -14,16 +14,16 @@ import {
 import { DateTime } from "luxon";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { extractDiscordMentions, isAnnouncementMediaUrl, type AllowedUser, type Announcement } from "@scheduler/shared";
-import { api, clearStoredToken, getStoredToken, login, setStoredToken, validateSession } from "./api";
+import { api, clearSession, discordLoginUrl, validateSession, type SessionInfo } from "./api";
 import { GiphyPickerModal } from "./GiphyPickerModal";
 import { MentionPickerModal, type MentionSelection } from "./MentionPickerModal";
 import { TIMEZONE_OPTIONS } from "./timezones";
+import { EmptyGuildState } from "./EmptyGuildState";
 
 const AUTO_DELETE_LABEL = "1 hour";
-const initialAuthToken = getStoredToken();
 const GIPHY_API_KEY = import.meta.env.VITE_GIPHY_API_KEY?.trim() ?? "";
 
-type Guild = { id: string; name: string; icon_url: string | null };
+type Guild = { id: string; name: string; icon_url: string | null; role: "BOT_OWNER" | "SERVER_ADMIN" | "EDITOR" };
 type Channel = { id: string; guild_id: string; name: string; can_send: boolean; can_mention_everyone?: boolean };
 type Role = { id: string; name: string; color: string | null; mentionable: boolean };
 type MentionMember = { id: string; username: string; display_name: string; nickname: string | null; avatar_url: string; bot: boolean };
@@ -34,7 +34,8 @@ type DiscordUser = {
   display_name: string | null;
   avatar_url: string | null;
 };
-type Page = "announcements" | "users" | "settings";
+type Page = "announcements" | "users" | "access" | "settings";
+type AccessGrant = { id: string; discord_user_id: string; role: string };
 
 const preferenceKeys = {
   guildId: "noobnouncer_last_guild_id",
@@ -94,8 +95,10 @@ function createEmptyForm(overrides: Partial<typeof defaultForm> = {}) {
 }
 
 export function App() {
-  const [token, setToken] = useState(initialAuthToken);
-  const [isCheckingSession, setIsCheckingSession] = useState(Boolean(initialAuthToken));
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [grants, setGrants] = useState<AccessGrant[]>([]);
+  const [editorId, setEditorId] = useState("");
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [page, setPage] = useState<Page>("announcements");
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -109,7 +112,7 @@ export function App() {
   const [suggestions, setSuggestions] = useState<DiscordUser[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
-  const [loginError, setLoginError] = useState("");
+  const [loginError, setLoginError] = useState(new URLSearchParams(location.search).has("auth_error") ? "Discord login failed or was cancelled. Please try again." : "");
   const [toast, setToast] = useState("");
   const [isRefreshingGuilds, setIsRefreshingGuilds] = useState(false);
   const [isGiphyPickerOpen, setIsGiphyPickerOpen] = useState(false);
@@ -117,6 +120,15 @@ export function App() {
   const [mentionMembers, setMentionMembers] = useState<Record<string, MentionMember>>({});
   const [isSavingAnnouncement, setIsSavingAnnouncement] = useState(false);
   const messageRef = useRef<HTMLTextAreaElement>(null);
+  const activeGuild = useRef(selectedGuild);
+  activeGuild.current = selectedGuild;
+  function reportError(err: unknown) {
+    setError(err instanceof Error ? err.message : "Request failed. Please try again.");
+  }
+  async function reloadAnnouncements(guildId: string) {
+    const items = await api<Announcement[]>(`/announcements?guild_id=${guildId}`);
+    if (activeGuild.current === guildId) setAnnouncements(items);
+  }
 
   const channelById = useMemo(
     () => Object.fromEntries(channels.map((channel) => [channel.id, channel])),
@@ -125,8 +137,8 @@ export function App() {
 
   useEffect(() => {
     function handleExpiredSession() {
-      clearStoredToken();
-      setToken(null);
+      clearSession();
+      setSession(null);
       setLoginError("Session expired. Please log in again.");
     }
 
@@ -148,92 +160,67 @@ export function App() {
     if (initialGuild) localStorage.setItem(preferenceKeys.guildId, initialGuild);
     setForm((current) => ({ ...current, guild_id: initialGuild, date: current.date || todayDate() }));
 
-    if (initialGuild) {
-      const loadedChannels = await api<Channel[]>(`/guilds/${initialGuild}/channels`);
-      setChannels(loadedChannels);
-      setRoles(await api<Role[]>(`/guilds/${initialGuild}/roles`));
-      const storedChannelId = getStoredChannelForGuild(initialGuild);
-      setForm((current) => {
-        const nextChannelId =
-          loadedChannels.find((channel) => channel.id === current.channel_id)?.id ||
-          loadedChannels.find((channel) => channel.id === storedChannelId)?.id ||
-          loadedChannels[0]?.id ||
-          "";
-        if (nextChannelId) storeChannelForGuild(initialGuild, nextChannelId);
-        return { ...current, channel_id: nextChannelId };
-      });
-    } else {
-      setChannels([]);
-      setRoles([]);
-      setToast("Bot needs to be invited to the server first");
-    }
-
     return loadedGuilds;
   }
 
-  async function loadBase() {
-    const loadedGuilds = await loadGuilds();
-    const initialGuild = selectedGuild || form.guild_id || loadedGuilds[0]?.id || "";
-    setAnnouncements(await api<Announcement[]>("/announcements"));
-    setAllowedUsers(await api<AllowedUser[]>(initialGuild ? `/allowed-users?guild_id=${initialGuild}` : "/allowed-users"));
-    setSettings(await api<Record<string, unknown>>("/settings"));
-  }
-
+  const canManage = guilds.find(g => g.id === selectedGuild)?.role !== "EDITOR" && guilds.some(g => g.id === selectedGuild);
   useEffect(() => {
-    if (!token) {
-      setIsCheckingSession(false);
-      return;
-    }
-
     let cancelled = false;
-    async function bootstrapSession() {
-      setIsCheckingSession(true);
-      try {
-        await validateSession();
-        if (!cancelled) {
-          setLoginError("");
-          await loadBase();
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "";
-        if (!cancelled) {
-          setToken(null);
-          if (message === "Unauthorized" || message.includes("401")) {
-            clearStoredToken();
-            setLoginError("Session expired. Please log in again.");
-          } else {
-            setLoginError("Cannot connect to server. Check that the bot/API is running.");
-          }
-        }
-      } finally {
-        if (!cancelled) setIsCheckingSession(false);
-      }
-    }
-
-    void bootstrapSession();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+    void validateSession().then(async current => {
+      if (cancelled) return;
+      setSession(current);
+      await loadGuilds();
+      if (current.isBotOwner) setSettings(await api<Record<string, unknown>>("/settings"));
+    }).catch(err => {
+      if (!cancelled) { setLoginError(err.message === "Unauthorized" ? "" : err.message); setError(err.message); }
+    })
+      .finally(() => { if (!cancelled) setIsCheckingSession(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
-    if (!selectedGuild || !token) return;
+    if (!session) return;
+    function denied() {
+      setAnnouncements([]); setAllowedUsers([]); setGrants([]); setChannels([]); setRoles([]);
+      setError("Access was denied or changed. Refresh servers to check your permissions.");
+    }
+    window.addEventListener("scheduler:access-denied", denied);
+    const incomplete = () => setError("Some servers could not be verified by Discord. Only verified servers are shown. Please refresh shortly.");
+    window.addEventListener("scheduler:discovery-incomplete", incomplete);
+    return () => {
+      window.removeEventListener("scheduler:access-denied", denied);
+      window.removeEventListener("scheduler:discovery-incomplete", incomplete);
+    };
+  }, [session]);
+
+  useEffect(() => {
+    setAnnouncements([]); setAllowedUsers([]); setGrants([]); setChannels([]); setRoles([]);
+    setEditingId(null); setForm(createEmptyForm({ guild_id: selectedGuild }));
+    setSuggestions([]); setUserSearch(""); setIsMentionPickerOpen(false); setMentionMembers({});
+    if (!selectedGuild || !session || !guilds.some(g => g.id === selectedGuild)) return;
+    const controller = new AbortController();
+    const options = { signal: controller.signal };
     localStorage.setItem(preferenceKeys.guildId, selectedGuild);
-    void api<Channel[]>(`/guilds/${selectedGuild}/channels`).then((loadedChannels) => {
-      setChannels(loadedChannels);
-      setForm((current) => ({
-        ...current,
-        guild_id: selectedGuild,
-        channel_id: loadedChannels.some((channel) => channel.id === current.channel_id)
-          ? current.channel_id
-          : loadedChannels.find((channel) => channel.id === getStoredChannelForGuild(selectedGuild))?.id ||
-            loadedChannels[0]?.id ||
-            ""
-      }));
-    });
-    void api<Role[]>(`/guilds/${selectedGuild}/roles`).then(setRoles).catch((err) => setError(err.message));
-    void api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`).then(setAllowedUsers);
-  }, [selectedGuild, token]);
+    async function load() {
+      const [loadedChannels, loadedRoles, loadedAnnouncements] = await Promise.all([
+        api<Channel[]>('/guilds/' + selectedGuild + '/channels', options),
+        api<Role[]>('/guilds/' + selectedGuild + '/roles', options),
+        api<Announcement[]>('/announcements?guild_id=' + selectedGuild, options)
+      ]);
+      if (controller.signal.aborted) return;
+      setChannels(loadedChannels); setRoles(loadedRoles); setAnnouncements(loadedAnnouncements);
+      setForm(current => ({ ...current, channel_id: loadedChannels.find(c => c.id === getStoredChannelForGuild(selectedGuild))?.id || loadedChannels[0]?.id || "" }));
+      if (canManage) {
+        const [users, access] = await Promise.all([
+          api<AllowedUser[]>('/allowed-users?guild_id=' + selectedGuild, options),
+          api<AccessGrant[]>('/guilds/' + selectedGuild + '/dashboard-access', options)
+        ]);
+        if (!controller.signal.aborted) { setAllowedUsers(users); setGrants(access); }
+      } else setPage("announcements");
+    }
+    void load().catch(err => { if (!controller.signal.aborted) setError(err.message); });
+    return () => controller.abort();
+  }, [selectedGuild, session, canManage, guilds]);
 
   useEffect(() => {
     if (form.guild_id && form.channel_id) {
@@ -257,9 +244,9 @@ export function App() {
       setSelectedGuild(nextGuildId);
 
       if (!result.guilds.length) {
-        setToast("Bot needs to be invited to the server first");
+        setToast("No authorized servers found.");
       } else {
-        setToast(result.added > 0 ? "Servers refreshed" : "No new servers found");
+        setToast("Servers and permissions refreshed.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not refresh servers");
@@ -278,32 +265,18 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!selectedGuild || userSearch.trim().length < 2) {
+    if (!selectedGuild || !canManage || userSearch.trim().length < 2) {
       setSuggestions([]);
       return;
     }
+    const controller = new AbortController();
     const handle = window.setTimeout(() => {
-      void api<DiscordUser[]>(`/guilds/${selectedGuild}/users?search=${encodeURIComponent(userSearch)}`)
+      void api<DiscordUser[]>(`/guilds/${selectedGuild}/users?search=${encodeURIComponent(userSearch)}`, { signal: controller.signal })
         .then(setSuggestions)
-        .catch((err) => setError(err.message));
+        .catch((err) => { if (!controller.signal.aborted) reportError(err); });
     }, 250);
-    return () => window.clearTimeout(handle);
-  }, [userSearch, selectedGuild]);
-
-  async function onLogin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const password = new FormData(event.currentTarget).get("password") as string;
-    const rememberDevice = new FormData(event.currentTarget).get("rememberDevice") === "on";
-
-    try {
-      const { token: nextToken } = await login(password, rememberDevice);
-      setStoredToken(nextToken, rememberDevice);
-      setLoginError("");
-      setToken(nextToken);
-    } catch (err) {
-      setLoginError(err instanceof Error ? err.message : "Invalid password");
-    }
-  }
+    return () => { window.clearTimeout(handle); controller.abort(); };
+  }, [userSearch, selectedGuild, canManage]);
 
   async function saveAnnouncement(event: FormEvent) {
     event.preventDefault();
@@ -349,11 +322,12 @@ export function App() {
             body: JSON.stringify(payload)
           });
 
+      if (activeGuild.current !== payload.guild_id) return;
       localStorage.setItem(preferenceKeys.guildId, form.guild_id);
       storeChannelForGuild(form.guild_id, form.channel_id);
       setForm(createEmptyForm({ guild_id: form.guild_id, channel_id: form.channel_id, date: form.date }));
       setEditingId(null);
-      setAnnouncements(await api<Announcement[]>("/announcements"));
+      await reloadAnnouncements(selectedGuild);
 
       if (saved.movedToNextOccurrence) {
         const nextSend = DateTime.fromISO(saved.scheduled_at)
@@ -463,7 +437,7 @@ export function App() {
       method: "PUT",
       body: JSON.stringify({ status })
     });
-    setAnnouncements(await api<Announcement[]>("/announcements"));
+    await reloadAnnouncements(selectedGuild);
   }
 
   async function addAllowedUser(user: DiscordUser) {
@@ -471,7 +445,8 @@ export function App() {
       method: "POST",
       body: JSON.stringify({ ...user, guild_id: selectedGuild })
     });
-    setAllowedUsers(await api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`));
+    const users = await api<AllowedUser[]>(`/allowed-users?guild_id=${selectedGuild}`);
+    if (activeGuild.current === selectedGuild) setAllowedUsers(users);
     setUserSearch("");
     setSuggestions([]);
   }
@@ -481,32 +456,38 @@ export function App() {
     setAllowedUsers((users) => users.filter((user) => user.id !== id));
   }
 
-  function logout() {
-    clearStoredToken();
-    setToken(null);
-    setLoginError("");
+  async function logout() {
+    try {
+      await api("/auth/logout", { method: "POST" });
+      clearSession(); setSession(null); setGuilds([]); setAnnouncements([]); setAllowedUsers([]); setGrants([]);
+      setLoginError("");
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not log out"); }
+  }
+  async function addEditor(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await api('/guilds/' + selectedGuild + '/dashboard-access', { method: "POST", body: JSON.stringify({ discord_user_id: editorId.trim() }) });
+      const loaded = await api<AccessGrant[]>('/guilds/' + selectedGuild + '/dashboard-access');
+      if (activeGuild.current === selectedGuild) { setGrants(loaded); setEditorId(""); }
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not grant access"); }
+  }
+  async function revokeEditor(userId: string) {
+    try {
+      await api('/guilds/' + selectedGuild + '/dashboard-access/' + userId, { method: "DELETE" });
+      if (activeGuild.current === selectedGuild) setGrants(current => current.filter(g => g.discord_user_id !== userId));
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not revoke access"); }
   }
 
-  if (!token || isCheckingSession) {
-    return (
-      <main className="login-screen">
-        <form className="login-panel" onSubmit={onLogin}>
-          <div className="mark">DS</div>
-          <h1>Discord Scheduler</h1>
-          <p>Admin access for announcement scheduling.</p>
-          {loginError && <div className="login-error">{loginError}</div>}
-          <input name="password" type="password" placeholder="Admin password" required />
-          <label className="remember-device">
-            <input name="rememberDevice" type="checkbox" defaultChecked />
-            <span>Remember this device</span>
-          </label>
-          <button type="submit" disabled={isCheckingSession}>
-            {isCheckingSession ? "Checking session" : "Log in"}
-          </button>
-        </form>
-      </main>
-    );
+  if (!session || isCheckingSession) {
+    return <main className="login-screen"><section className="login-panel">
+      <div className="mark">DS</div><h1>Noobnouncer</h1>
+      <p>Schedule announcements for your Discord community.</p>
+      {loginError && <div className="login-error">{loginError}</div>}
+      {isCheckingSession ? <p>Checking session…</p> : <a className="discord-login" href={discordLoginUrl}>Login with Discord</a>}
+    </section></main>;
   }
+  if (!guilds.length) return <EmptyGuildState session={session} error={error} refreshing={isRefreshingGuilds}
+    onRefresh={refreshGuilds} onInvite={openInviteUrl} onLogout={logout} />;
 
   return (
     <div className="app-shell">
@@ -514,10 +495,11 @@ export function App() {
         <div className="brand"><span>DS</span><strong>Scheduler</strong></div>
         <nav>
           <button className={page === "announcements" ? "active" : ""} onClick={() => setPage("announcements")}><ListBullets /> Announcements</button>
-          <button className={page === "users" ? "active" : ""} onClick={() => setPage("users")}><Users /> Allowed Users</button>
-          <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}><GearSix /> Settings</button>
+          {canManage && <button className={page === "users" ? "active" : ""} onClick={() => setPage("users")}><Users /> Allowed Users</button>}
+          {canManage && <button className={page === "access" ? "active" : ""} onClick={() => setPage("access")}><Users /> Dashboard Access</button>}
+          {session.isBotOwner && <button className={page === "settings" ? "active" : ""} onClick={() => setPage("settings")}><GearSix /> Settings</button>}
         </nav>
-        <button className="logout" onClick={logout}>Log out</button>
+        <details className="account-menu"><summary>{session.user.avatar_url && <img width="28" height="28" src={session.user.avatar_url} alt="" />} {session.user.username}</summary><button onClick={logout}>Logout</button></details>
       </aside>
 
       <main className="workspace">
@@ -639,8 +621,8 @@ export function App() {
                   </div>
                   <div className="row-actions">
                     <button title="Edit" onClick={() => editAnnouncement(item)}><PencilSimple /></button>
-                    <button title="Disable" onClick={() => setStatus(item, item.status === "disabled" ? "scheduled" : "disabled")}><Prohibit /></button>
-                    <button title="Delete" className="danger" onClick={() => deleteAnnouncement(item.id)}><Trash /></button>
+                    <button title="Disable" onClick={() => void setStatus(item, item.status === "disabled" ? "scheduled" : "disabled").catch(reportError)}><Prohibit /></button>
+                    <button title="Delete" className="danger" onClick={() => void deleteAnnouncement(item.id).catch(reportError)}><Trash /></button>
                   </div>
                 </article>
               ))}
@@ -649,7 +631,7 @@ export function App() {
           </>
         )}
 
-        {page === "users" && (
+        {page === "users" && canManage && (
           <section className="panel users-panel">
             <header className="section-header">
               <div><p>Allowed Users</p><h1>Control command access</h1></div>
@@ -662,7 +644,7 @@ export function App() {
               {suggestions.length > 0 && (
                 <div className="suggestions">
                   {suggestions.map((user) => (
-                    <button key={user.discord_user_id} onClick={() => addAllowedUser(user)}>
+                    <button key={user.discord_user_id} onClick={() => void addAllowedUser(user).catch(reportError)}>
                       {user.avatar_url && <img src={user.avatar_url} alt="" />}
                       <span>{user.display_name || user.username}</span>
                       <small>@{user.username}</small>
@@ -677,14 +659,23 @@ export function App() {
                   {user.avatar_url && <img src={user.avatar_url} alt="" />}
                   <strong>{user.display_name || user.username}</strong>
                   <span>@{user.username}</span>
-                  <button onClick={() => removeAllowedUser(user.id)}><Trash /></button>
+                  <button onClick={() => void removeAllowedUser(user.id).catch(reportError)}><Trash /></button>
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        {page === "settings" && (
+        {page === "access" && canManage && <section className="panel users-panel">
+          <header className="section-header"><div><p>Dashboard Access</p><h1>Server editors</h1></div>
+            <select value={selectedGuild} onChange={e => setSelectedGuild(e.target.value)}>{guilds.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>
+          </header>
+          <p>Owner and administrator rights come from Discord. Explicit editors can manage announcements only. This is separate from .list command access.</p>
+          <form onSubmit={addEditor} className="search-box"><label>Discord user ID<input value={editorId} onChange={e => setEditorId(e.target.value)} pattern="[0-9]{17,20}" required placeholder="Paste a server member’s Discord ID" /></label><button type="submit">Add editor</button></form>
+          <div className="user-list">{grants.map(grant => <div className="user-row" key={grant.id}><strong>{grant.discord_user_id}</strong><span>{grant.role}</span><button onClick={() => revokeEditor(grant.discord_user_id)}>Revoke</button></div>)}</div>
+          {!grants.length && <p>No explicit editors.</p>}
+        </section>}
+        {page === "settings" && session.isBotOwner && (
           <section className="panel settings-panel">
             <header className="section-header">
               <div><p>Settings</p><h1>Runtime status</h1></div>

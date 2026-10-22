@@ -393,3 +393,10 @@ dd { margin: 0; overflow-wrap: anywhere; }
   .server-controls button { justify-content: center; }
   .selected-gif-preview { grid-template-columns: 1fr; }
 }
+
+.discord-login { display: block; padding: 14px 20px; border-radius: 8px; background: #5865f2; color: white; font-weight: 600; text-align: center; text-decoration: none; }
+.discord-login:hover { background: #4752c4; }
+.discord-login:focus-visible { outline: 3px solid white; outline-offset: 3px; }
+.account-menu { margin-top: auto; padding: 16px; }
+.account-menu summary { cursor: pointer; overflow-wrap: anywhere; }
+.account-menu img { border-radius: 50%; vertical-align: middle; }

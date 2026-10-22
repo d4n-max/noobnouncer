@@ -1,14 +1,15 @@
 import cors from "cors";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { PermissionFlagsBits } from "discord.js";
 import { Announcement, isAnnouncementMediaUrl, repeatTypes } from "@scheduler/shared";
-import { issueAdminToken, NORMAL_SESSION_DAYS, requireAdmin, TRUSTED_DEVICE_SESSION_DAYS } from "./auth.js";
+import { createAuth, context, HttpError } from "./auth.js";
+import { createAuthorization, type LiveMember } from "./authorization.js";
 import { normalizeAnnouncementSchedule } from "./announcementRules.js";
-import { client, getGuildRoles, searchGuildMembers, syncAllGuilds, syncGuild, syncGuildChannels } from "./discord.js";
+import { client, getGuildRoles, searchGuildMembers, syncGuild, syncGuildChannels } from "./discord.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -33,7 +34,7 @@ const announcementSchema = z.object({
   timezone: z.string().default(env.DEFAULT_TIMEZONE),
   repeat_type: z.enum(repeatTypes).default("none"),
   status: z.enum(["scheduled", "sent", "disabled"]).default("scheduled"),
-  created_by: z.string().optional().nullable()
+  created_by: z.never().optional()
 });
 
 type AnnouncementRow = z.infer<typeof announcementSchema> & {
@@ -42,10 +43,10 @@ type AnnouncementRow = z.infer<typeof announcementSchema> & {
   repeat_type: "none" | "daily" | "weekly" | "every_two_weeks" | "monthly";
 };
 
-async function cleanupBadAnnouncementStatuses() {
+async function cleanupBadAnnouncementStatuses(db = supabase) {
   const now = new Date().toISOString();
 
-  const futureSent = await supabase
+  const futureSent = await db
     .from("announcements")
     .update({ status: "scheduled", updated_at: now })
     .eq("status", "sent")
@@ -53,7 +54,7 @@ async function cleanupBadAnnouncementStatuses() {
 
   if (futureSent.error) throw futureSent.error;
 
-  const recurringSent = await supabase
+  const recurringSent = await db
     .from("announcements")
     .update({ status: "scheduled", updated_at: now })
     .eq("status", "sent")
@@ -61,7 +62,7 @@ async function cleanupBadAnnouncementStatuses() {
 
   if (recurringSent.error) throw recurringSent.error;
 
-  const { data: overdueRecurring, error: overdueRecurringError } = await supabase
+  const { data: overdueRecurring, error: overdueRecurringError } = await db
     .from("announcements")
     .select("id,scheduled_at,timezone,repeat_type,status")
     .eq("status", "scheduled")
@@ -79,7 +80,7 @@ async function cleanupBadAnnouncementStatuses() {
     });
     if (!normalized.movedToNextOccurrence) continue;
 
-    const { error } = await supabase
+    const { error } = await db
       .from("announcements")
       .update({
         scheduled_at: normalized.scheduled_at,
@@ -122,67 +123,106 @@ function sortAnnouncementsForDashboard<T extends {
   });
 }
 
-export function createApi() {
+export function createApi(deps: { db?: typeof supabase; fetcher?: typeof fetch; maintenance?: boolean; sync?: typeof syncGuild } = {}) {
+  const db = deps.db ?? supabase;
+  const auth = createAuth(db, deps.fetcher);
+  const authorization = createAuthorization(db, deps.fetcher);
+  function accessFor(res: express.Response): ReturnType<typeof authorization.forRequest> { return res.locals.access; }
+  async function discover(res: express.Response) {
+    const access = accessFor(res);
+    const guilds = await access.guilds(context(res).user);
+    if (access.discoveryIncomplete) res.set("X-Guild-Discovery-Partial", "true");
+    return guilds;
+  }
+  const sync = deps.sync ?? syncGuild;
   const app = express();
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const webDist = path.resolve(__dirname, "../../web/dist");
 
-  void cleanupBadAnnouncementStatuses().catch((error) => {
+  if (deps.maintenance !== false) void cleanupBadAnnouncementStatuses(db).catch((error) => {
     console.error("Announcement status cleanup failed", error);
   });
 
-  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  app.disable("x-powered-by");
+  app.set("trust proxy", env.TRUST_PROXY_HOPS);
+  app.use((_req, res, next) => {
+    res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" }); next();
+  });
+  app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
+  app.use(cors({ origin: env.CORS_ORIGIN, credentials: true, exposedHeaders: ["X-Guild-Discovery-Partial", "Retry-After"] }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.static(webDist));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
-  app.post("/api/auth/login", (req, res) => {
-    if (req.body?.password !== env.ADMIN_PASSWORD) {
-      res.status(401).json({ error: "Invalid password" });
-      return;
-    }
-
-    const rememberDevice = Boolean(req.body?.rememberDevice);
-    res.json({
-      token: issueAdminToken(rememberDevice),
-      expiresInDays: rememberDevice ? TRUSTED_DEVICE_SESSION_DAYS : NORMAL_SESSION_DAYS
-    });
+  const attempts = new Map<string, { count: number; until: number }>();
+  app.use("/api/auth/discord", (req, res, next) => {
+    const now = Date.now();
+    for (const [key, value] of attempts) if (value.until <= now) attempts.delete(key);
+    const key = req.ip ?? "unknown";
+    const entry = attempts.get(key) ?? { count: 0, until: now + 60_000 };
+    if (attempts.size >= 10000 && !attempts.has(key)) return res.status(429).json({ error: "Try again shortly" });
+    attempts.set(key, entry);
+    if (++entry.count > 20) return res.status(429).json({ error: "Try again shortly" });
+    next();
   });
-
-  app.get("/api/auth/me", requireAdmin, (_req, res) => {
-    res.json({ ok: true });
+  app.get("/api/auth/discord", auth.start);
+  app.get("/api/auth/discord/callback", auth.callback);
+  app.use("/api", auth.requireSession);
+  app.use("/api", (_req, res, next) => { res.locals.access = authorization.forRequest(); next(); });
+  const userRequests = new Map<string, { count: number; until: number }>();
+  app.use("/api", (_req, res, next) => {
+    const now = Date.now();
+    for (const [key, value] of userRequests) if (value.until <= now) userRequests.delete(key);
+    const key = context(res).user.id;
+    const entry = userRequests.get(key) ?? { count: 0, until: now + 60_000 };
+    if (userRequests.size >= 10000 && !userRequests.has(key)) return res.status(429).json({ error: "Try again shortly" });
+    userRequests.set(key, entry);
+    if (++entry.count > 120) return res.status(429).json({ error: "Too many requests. Try again shortly." });
+    next();
   });
-
-  app.use("/api", requireAdmin);
-
-  app.get("/api/guilds", async (_req, res) => {
-    const guilds = await syncAllGuilds();
-    res.json(
-      guilds.map((guild) => ({
-        id: guild.id,
-        name: guild.name,
-        icon_url: guild.iconURL()
-      }))
-    );
+  app.get("/api/auth/me", (_req, res) => {
+    const { user, csrfToken } = context(res);
+    res.json({ user: { ...user, avatar_url: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png` : null }, csrfToken, isBotOwner: user.id === env.BOT_OWNER_DISCORD_ID });
   });
-
+  app.post("/api/auth/logout", auth.logout);
+  app.get("/api/guilds", async (_req, res) => res.json(await discover(res)));
   app.post("/api/guilds/refresh", async (_req, res) => {
-    const { data: existingGuilds, error } = await supabase.from("guilds").select("id");
-    if (error) return res.status(500).json({ error: error.message });
-
-    const previousIds = new Set((existingGuilds ?? []).map((guild) => guild.id));
-    const guilds = await syncAllGuilds();
-    const payload = guilds.map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      icon_url: guild.iconURL()
-    }));
-
-    res.json({
-      guilds: payload,
-      added: payload.filter((guild) => !previousIds.has(guild.id)).length
-    });
+    const guilds = await discover(res);
+    res.json({ guilds, added: 0 });
+  });
+  app.use("/api/guilds/:guildId", async (req, res, next) => {
+    try { res.locals.guildRole = await accessFor(res).role(context(res).user, req.params.guildId); next(); }
+    catch (error) { next(error); }
+  });
+  const requiredGuild = (value: unknown) => z.string().regex(/^\d{17,20}$/).parse(value);
+  async function resource(table: "announcements" | "allowed_users", id: string) {
+    if (!z.string().uuid().safeParse(id).success) throw new HttpError(400, "Invalid resource ID");
+    const { data, error } = await db.from(table).select("*").eq("id", id).maybeSingle();
+    if (error) throw new HttpError(503, "Data service unavailable");
+    if (!data) throw new HttpError(403, "Resource unavailable");
+    return data;
+  }
+  app.get("/api/guilds/:guildId/dashboard-access", async (req, res) => {
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
+    const { data, error } = await db.from("dashboard_access").select("*").eq("guild_id", req.params.guildId);
+    if (error) throw new HttpError(503, "Data service unavailable");
+    res.json(data);
+  });
+  app.post("/api/guilds/:guildId/dashboard-access", async (req, res) => {
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
+    const { discord_user_id } = z.object({ discord_user_id: z.string().regex(/^\d{17,20}$/) }).strict().parse(req.body);
+    await accessFor(res).discord<LiveMember>(`/guilds/${req.params.guildId}/members/${discord_user_id}`);
+    await sync(req.params.guildId, { channels: false });
+    const { data, error } = await db.from("dashboard_access").upsert({ guild_id: req.params.guildId, discord_user_id, role: "EDITOR", granted_by: context(res).user.id, updated_at: new Date().toISOString() }, { onConflict: "guild_id,discord_user_id" }).select().single();
+    if (error) throw new HttpError(503, "Data service unavailable");
+    res.status(201).json(data);
+  });
+  app.delete("/api/guilds/:guildId/dashboard-access/:userId", async (req, res) => {
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
+    const { error } = await db.from("dashboard_access").delete().eq("guild_id", req.params.guildId).eq("discord_user_id", requiredGuild(req.params.userId));
+    if (error) throw new HttpError(503, "Data service unavailable");
+    res.status(204).end();
   });
 
   app.get("/api/bot/invite-url", (_req, res) => {
@@ -205,7 +245,7 @@ export function createApi() {
   });
 
   app.get("/api/guilds/:guildId/channels", async (req, res) => {
-    const guild = await syncGuild(req.params.guildId);
+    const guild = await sync(req.params.guildId, { channels: false });
     res.json(await syncGuildChannels(guild));
   });
 
@@ -214,7 +254,7 @@ export function createApi() {
       res.json(await getGuildRoles(req.params.guildId));
     } catch (error) {
       res.status(500).json({
-        error: error instanceof Error ? error.message : "Could not load roles"
+        error: error instanceof Error ? "Data service unavailable" : "Could not load roles"
       });
     }
   });
@@ -229,12 +269,13 @@ export function createApi() {
     try {
       res.json(await searchGuildMembers(req.params.guildId, query));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not search server members.";
+      const message = error instanceof Error ? "Data service unavailable" : "Could not search server members.";
       res.status(message.includes("invited") ? 404 : 500).json({ error: message });
     }
   });
 
   app.get("/api/guilds/:guildId/users", async (req, res) => {
+    await accessFor(res).role(context(res).user, req.params.guildId, true);
     const guild = await client.guilds.fetch(req.params.guildId);
     const query = String(req.query.search ?? "").trim();
     if (!query) {
@@ -253,44 +294,41 @@ export function createApi() {
     );
   });
 
-  app.get("/api/announcements", async (_req, res) => {
-    try {
-      await cleanupBadAnnouncementStatuses();
-    } catch (error) {
-      return res.status(500).json({
-        error: error instanceof Error ? error.message : "Could not normalize announcement statuses"
-      });
-    }
-
-    const { data, error } = await supabase
+  app.get("/api/announcements", async (req, res) => {
+    const guildIds = req.query.guild_id ? [requiredGuild(req.query.guild_id)] : (await discover(res)).map(g => g.id);
+    if (req.query.guild_id) await accessFor(res).role(context(res).user, guildIds[0]);
+    if (!guildIds.length) return res.json([]);
+    const { data, error } = await db
       .from("announcements")
-      .select("*");
-    if (error) return res.status(500).json({ error: error.message });
+      .select("*").in("guild_id", guildIds);
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.json(sortAnnouncementsForDashboard(data ?? []));
   });
 
   app.post("/api/announcements", async (req, res) => {
     const payload = announcementSchema.parse(req.body);
+    await accessFor(res).role(context(res).user, payload.guild_id);
+    await accessFor(res).channel(payload.guild_id, payload.channel_id);
+    await sync(payload.guild_id);
     const normalized = normalizeAnnouncementSchedule(payload);
     const normalizedPayload = {
       ...payload,
+      created_by: context(res).user.id,
       scheduled_at: normalized.scheduled_at,
       status: normalized.status
     };
-    const { data, error } = await supabase.from("announcements").insert(normalizedPayload).select().single();
-    if (error) return res.status(500).json({ error: error.message });
+    const { data, error } = await db.from("announcements").insert(normalizedPayload).select().single();
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(201).json({ ...data, movedToNextOccurrence: normalized.movedToNextOccurrence });
   });
 
   app.put("/api/announcements/:id", async (req, res) => {
     const payload = announcementSchema.partial().parse(req.body);
-    const { data: existing, error: existingError } = await supabase
-      .from("announcements")
-      .select("*")
-      .eq("id", req.params.id)
-      .single();
-
-    if (existingError) return res.status(500).json({ error: existingError.message });
+    const existing = await resource("announcements", req.params.id);
+    await accessFor(res).role(context(res).user, existing.guild_id);
+    if (payload.guild_id !== undefined && payload.guild_id !== existing.guild_id) throw new HttpError(403, "Announcements cannot move between servers");
+    await accessFor(res).channel(existing.guild_id, payload.channel_id ?? existing.channel_id);
+    if (payload.channel_id) await sync(existing.guild_id);
 
     const nextValues = {
       ...(existing as AnnouncementRow),
@@ -311,27 +349,31 @@ export function createApi() {
       status: normalized.status
     };
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("announcements")
       .update({ ...normalizedPayload, updated_at: new Date().toISOString() })
       .eq("id", req.params.id)
+      .eq("guild_id", existing.guild_id)
       .select()
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.json({ ...data, movedToNextOccurrence: normalized.movedToNextOccurrence });
   });
 
   app.delete("/api/announcements/:id", async (req, res) => {
-    const { error } = await supabase.from("announcements").delete().eq("id", req.params.id);
-    if (error) return res.status(500).json({ error: error.message });
+    const existing = await resource("announcements", req.params.id);
+    await accessFor(res).role(context(res).user, existing.guild_id);
+    const { error } = await db.from("announcements").delete().eq("id", req.params.id).eq("guild_id", existing.guild_id);
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(204).end();
   });
 
   app.get("/api/allowed-users", async (req, res) => {
-    let query = supabase.from("allowed_users").select("*").order("created_at", { ascending: false });
-    if (req.query.guild_id) query = query.eq("guild_id", String(req.query.guild_id));
+    const guildId = requiredGuild(req.query.guild_id);
+    await accessFor(res).role(context(res).user, guildId, true);
+    const query = db.from("allowed_users").select("*").eq("guild_id", guildId).order("created_at", { ascending: false });
     const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.json(data);
   });
 
@@ -345,22 +387,29 @@ export function createApi() {
         avatar_url: z.string().nullable().optional()
       })
       .parse(req.body);
-    const { data, error } = await supabase
+    await accessFor(res).role(context(res).user, payload.guild_id, true);
+    const member = await accessFor(res).discord<LiveMember>(`/guilds/${payload.guild_id}/members/${requiredGuild(payload.discord_user_id)}`);
+    payload.username = member.user.username;
+    await sync(payload.guild_id, { channels: false });
+    const { data, error } = await db
       .from("allowed_users")
       .upsert(payload, { onConflict: "guild_id,discord_user_id" })
       .select()
       .single();
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(201).json(data);
   });
 
   app.delete("/api/allowed-users/:id", async (req, res) => {
-    const { error } = await supabase.from("allowed_users").delete().eq("id", req.params.id);
-    if (error) return res.status(500).json({ error: error.message });
+    const existing = await resource("allowed_users", req.params.id);
+    await accessFor(res).role(context(res).user, existing.guild_id, true);
+    const { error } = await db.from("allowed_users").delete().eq("id", req.params.id).eq("guild_id", existing.guild_id);
+    if (error) return res.status(500).json({ error: "Data service unavailable" });
     res.status(204).end();
   });
 
   app.get("/api/settings", (_req, res) => {
+    if (context(res).user.id !== env.BOT_OWNER_DISCORD_ID) throw new HttpError(403, "Bot Owner access required");
     res.json({
       defaultTimezone: env.DEFAULT_TIMEZONE,
       inviteAvailable: Boolean(env.DISCORD_CLIENT_ID),
@@ -384,6 +433,15 @@ export function createApi() {
     res.sendFile(indexPath);
   });
 
+  const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+    if (error instanceof HttpError) {
+      if (error.retryAfter) res.set("Retry-After", String(error.retryAfter));
+      return void res.status(error.status).json({ error: error.message });
+    }
+    if (error instanceof z.ZodError || error instanceof SyntaxError) return void res.status(400).json({ error: "Invalid request data" });
+    res.status(503).json({ error: "Service unavailable. Please try again." });
+  };
+  app.use(errorHandler);
   return app;
 }
 
